@@ -6,17 +6,20 @@ Auto-reply to WhatsApp messages using a free AI (Groq) — runs on any Linux ser
 
 ## ✨ Features
 
-- 🔁 Auto-replies using **Groq free API** (Llama, Qwen, and more)
+- 🔁 Auto-replies using **Groq free API**
+- 🎯 **Live model picker** — fetches your account's models at setup, you choose
 - 📱 **No QR GUI** — scans via terminal ASCII QR
 - 🧠 Custom bot personality via system prompt
-- 🎯 **Live model picker** — fetches your account's available models at setup
 - ✅ **Whitelist mode** — reply only to specific contacts
 - 🚫 **Blacklist mode** — reply everyone except blocked numbers
 - 👥 Group chat support (optional)
 - 💾 Session saved — no re-scan on restart
-- 🔄 Auto-restart via systemd + built-in reconnect loop
-- 🪶 Lightweight — ~100MB RAM total
-- 🐧 Works on Arch, Ubuntu, Debian, Fedora, CentOS, openSUSE, Alpine
+- 🔄 Auto-reconnect on disconnect + clean Ctrl+C shutdown
+- 🚀 `run.sh` — one command start, auto-activates venv (no manual activation needed)
+- 🗑️ `remove.sh` — clean uninstaller
+- 🔄 Auto-restart via systemd
+- 🪶 Lightweight — ~100MB RAM
+- 🐧 Arch, Ubuntu, Debian, Fedora, CentOS, openSUSE, Alpine
 
 ---
 
@@ -40,7 +43,7 @@ The script will ask you:
 2. **AI model** — fetched live from your account, pick by number
 3. **Your phone number** — with country code, no `+` (e.g. `919876543210`)
 4. **Bot personality** — custom system prompt or press Enter for default
-5. **Mode** — blacklist or whitelist
+5. **Reply mode** — blacklist or whitelist
 6. **Contacts** — numbers to allow or block
 7. **Groups** — enable/disable group replies
 8. **Systemd service** — auto-start on boot (optional)
@@ -55,11 +58,31 @@ Then it installs everything and launches the bot automatically.
 ~/wa/
 ├── bot.py          # Main bot
 ├── config.json     # All settings
+├── run.sh          # Start the bot (handles venv automatically)
+├── remove.sh       # Clean uninstaller
 ├── session.db      # WA session (auto-created on first run)
 ├── bot.log         # Logs
 ├── venv/           # Python virtualenv
-└── wa-bot.service  # Systemd service
+└── wa-bot.service  # Systemd unit file
 ```
+
+---
+
+## ▶️ Running the Bot
+
+**Always use `run.sh`** — it activates the venv automatically so you never get `ModuleNotFoundError`:
+
+```bash
+~/wa/run.sh
+```
+
+Or from inside the folder:
+
+```bash
+cd ~/wa && ./run.sh
+```
+
+> ⚠️ Never run `python bot.py` directly — you'll get `ModuleNotFoundError: No module named 'neonize'` unless you manually activated the venv first.
 
 ---
 
@@ -88,8 +111,8 @@ Then it installs everything and launches the bot automatically.
 
 | Field | Description |
 |---|---|
-| `groq_model` | Model ID — must be one available on your Groq account |
-| `mode` | `"whitelist"` reply only allowed / `"blacklist"` reply all except blocked |
+| `groq_model` | Model ID — must exist on your Groq account |
+| `mode` | `"whitelist"` or `"blacklist"` |
 | `allowed_contacts` | Numbers to reply (whitelist mode) |
 | `blocked_contacts` | Numbers to skip (blacklist mode) |
 | `allow_groups` | `true` / `false` |
@@ -97,36 +120,53 @@ Then it installs everything and launches the bot automatically.
 | `blocked_groups` | Group IDs to skip |
 | `reply_delay_seconds` | Delay before replying (feels more human) |
 
-> **Tip:** To see which models are available on your key, run:
-> ```bash
-> curl -s https://api.groq.com/openai/v1/models \
->   -H "Authorization: Bearer $(python3 -c "import json; print(json.load(open('config.json'))['groq_api_key'])")" \
->   | python3 -c "import json,sys; [print(m['id']) for m in json.load(sys.stdin)['data']]" | sort
-> ```
+**To see which models are on your account:**
+
+```bash
+~/wa/run.sh --list-models
+```
+
+**To change model** — edit `config.json` then restart:
+
+```bash
+nano ~/wa/config.json   # update groq_model
+~/wa/run.sh
+```
 
 ---
 
 ## 🔄 Manage Bot
 
 ```bash
-# View live logs
+# Start
+~/wa/run.sh
+
+# Stop (if running in terminal)
+Ctrl+C
+
+# Systemd commands
+sudo systemctl start   wa-bot
+sudo systemctl stop    wa-bot
+sudo systemctl restart wa-bot
+sudo systemctl status  wa-bot
+sudo systemctl disable wa-bot    # stop auto-start
+
+# Live logs
 sudo journalctl -u wa-bot -f
 
-# Stop
-sudo systemctl stop wa-bot
-
-# Start
-sudo systemctl start wa-bot
-
-# Restart
-sudo systemctl restart wa-bot
-
-# Disable auto-start
-sudo systemctl disable wa-bot
-
 # Manual run (no systemd)
-cd ~/wa && source venv/bin/activate && python bot.py
+cd ~/wa && ./run.sh
 ```
+
+---
+
+## 🗑️ Uninstall
+
+```bash
+bash ~/wa/remove.sh
+```
+
+Removes the systemd service, stops the bot, and deletes `~/wa` completely.
 
 ---
 
@@ -135,7 +175,7 @@ cd ~/wa && source venv/bin/activate && python bot.py
 1. Go to [console.groq.com](https://console.groq.com)
 2. Sign up — no credit card needed
 3. **API Keys** → **Create New Key**
-4. Copy key starting with `gsk_...`
+4. Copy the key starting with `gsk_...`
 
 Free tier: **14,400 requests/day** — more than enough for personal use.
 
@@ -168,31 +208,32 @@ Session saved to `session.db` — no re-scan on restart.
 
 ## ❓ Troubleshooting
 
+**`ModuleNotFoundError: No module named 'neonize'`**
+Use `~/wa/run.sh` instead of `python bot.py` directly. `run.sh` activates the venv automatically.
+
 **Bot disconnects / WebSocket EOF**
-The bot has a built-in reconnect loop — it will reconnect automatically after 5 seconds. No action needed.
+Built-in reconnect loop handles this — reconnects automatically after 5 seconds.
 
 **Groq 404 — model not found**
-Your Groq account may not have access to that model. Re-run setup to pick from your available models, or update `groq_model` in `config.json` manually.
+Your account doesn't have that model. Run `~/wa/run.sh --list-models` to see what's available, then update `groq_model` in `config.json`.
 
 **Groq 401 — unauthorized**
-Your API key is invalid or revoked. Generate a new one at [console.groq.com](https://console.groq.com) and update `config.json`.
+API key is invalid or revoked. Generate a new one at [console.groq.com](https://console.groq.com) and update `config.json`.
 
 **Groq 429 — rate limit**
-Free tier allows 14,400 requests/day. The bot waits 10s and retries automatically.
+Free tier: 14,400 requests/day. The bot waits 10s and retries automatically.
 
 ---
 
 ## ⚠️ Disclaimer
 
-This project uses the unofficial WhatsApp Web protocol via [neonize](https://github.com/krypton-byte/neonize). Use at your own risk. Not affiliated with Meta/WhatsApp.
+Uses the unofficial WhatsApp Web protocol via [neonize](https://github.com/krypton-byte/neonize). Use at your own risk. Not affiliated with Meta/WhatsApp.
 
 ---
 
 ## 👤 Author
 
-**Vineet** — [ci.vps@proton.me](mailto:ci.vps@proton.me)
-
-GitHub: [@psvineet](https://github.com/psvineet)
+**Vineet** — [ci.vps@proton.me](mailto:ci.vps@proton.me) · [@psvineet](https://github.com/psvineet)
 
 ---
 
