@@ -222,6 +222,10 @@ Make sure numbers include the country code (e.g. `919876543210` not `9876543210`
 
 ---
 
+# Purge stale/deleted contact cache and optimize DB size
+
+`sqlite3 ~/wa/session.db "DELETE FROM whatsmeow_contacts WHERE (full_name IS NULL OR full_name = '') AND (first_name IS NULL OR first_name = ''); VACUUM;"`
+
 ## ⚠️ Disclaimer
 
 Uses the unofficial WhatsApp Web protocol via [neonize](https://github.com/krypton-byte/neonize). Use at your own risk. Not affiliated with Meta/WhatsApp.
