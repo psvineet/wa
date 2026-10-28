@@ -3,17 +3,12 @@
 # Supports: Arch, Ubuntu, Debian, Fedora, CentOS, RHEL, openSUSE, Alpine
 # Run: bash <(curl -s https://raw.githubusercontent.com/psvineet/wa/main/setup.sh)
 
-# ── Safety ─────────────────────────────────────────────────────────────────────
 set -euo pipefail
 IFS=$'\n\t'
 
 # ── Colors ─────────────────────────────────────────────────────────────────────
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m'
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 info()    { echo -e "${CYAN}  $*${NC}"; }
 success() { echo -e "${GREEN}  ✓ $*${NC}"; }
@@ -35,47 +30,30 @@ echo -e "${BOLD}  WhatsApp AI Autoresponder — Setup Wizard${NC}"
 echo "  ─────────────────────────────────────────"
 echo ""
 
-# ── Step 1: Detect distro + install system packages ────────────────────────────
+# ── Step 1: Detect distro + install packages ───────────────────────────────────
 echo -e "${YELLOW}[1/7] Detecting distro and installing packages...${NC}"
-
 PKG_INSTALLED=false
 
-if command -v pacman &>/dev/null; then
-    info "Distro: Arch / Manjaro"
-    sudo pacman -Sy --noconfirm python python-pip python-virtualenv curl
-    PKG_INSTALLED=true
-elif command -v apt-get &>/dev/null; then
-    info "Distro: Debian / Ubuntu / Mint"
-    sudo apt-get update -qq
-    sudo apt-get install -y python3 python3-pip python3-venv curl
-    PKG_INSTALLED=true
-elif command -v dnf &>/dev/null; then
-    info "Distro: Fedora / RHEL 8+ / AlmaLinux"
-    sudo dnf install -y python3 python3-pip python3-virtualenv curl
-    PKG_INSTALLED=true
-elif command -v yum &>/dev/null; then
-    info "Distro: CentOS / RHEL 7"
-    sudo yum install -y python3 python3-pip curl
-    pip3 install --quiet virtualenv
-    PKG_INSTALLED=true
-elif command -v zypper &>/dev/null; then
-    info "Distro: openSUSE"
-    sudo zypper install -y python3 python3-pip python3-virtualenv curl
-    PKG_INSTALLED=true
-elif command -v apk &>/dev/null; then
-    info "Distro: Alpine"
-    sudo apk add --no-cache python3 py3-pip curl
-    pip3 install --quiet virtualenv
-    PKG_INSTALLED=true
+if   command -v pacman  &>/dev/null; then info "Arch / Manjaro"
+     sudo pacman -Sy --noconfirm python python-pip python-virtualenv curl; PKG_INSTALLED=true
+elif command -v apt-get &>/dev/null; then info "Debian / Ubuntu / Mint"
+     sudo apt-get update -qq && sudo apt-get install -y python3 python3-pip python3-venv curl; PKG_INSTALLED=true
+elif command -v dnf     &>/dev/null; then info "Fedora / RHEL 8+ / AlmaLinux"
+     sudo dnf install -y python3 python3-pip python3-virtualenv curl; PKG_INSTALLED=true
+elif command -v yum     &>/dev/null; then info "CentOS / RHEL 7"
+     sudo yum install -y python3 python3-pip curl && pip3 install --quiet virtualenv; PKG_INSTALLED=true
+elif command -v zypper  &>/dev/null; then info "openSUSE"
+     sudo zypper install -y python3 python3-pip python3-virtualenv curl; PKG_INSTALLED=true
+elif command -v apk     &>/dev/null; then info "Alpine"
+     sudo apk add --no-cache python3 py3-pip curl && pip3 install --quiet virtualenv; PKG_INSTALLED=true
 fi
 
 [[ "$PKG_INSTALLED" == false ]] && error "Unknown distro. Install python3 + pip manually then rerun."
 
-# ensure 'python' command exists
 if ! command -v python &>/dev/null; then
     PYTHON3_PATH="$(command -v python3)"
     sudo ln -sf "$PYTHON3_PATH" /usr/local/bin/python 2>/dev/null || \
-    sudo ln -sf "$PYTHON3_PATH" /usr/bin/python 2>/dev/null || true
+    sudo ln -sf "$PYTHON3_PATH" /usr/bin/python       2>/dev/null || true
 fi
 
 python --version &>/dev/null || error "python3 not found after install."
@@ -85,8 +63,7 @@ echo ""
 # ── Step 2: Create project folder ──────────────────────────────────────────────
 BOTDIR="$HOME/wa"
 echo -e "${YELLOW}[2/7] Creating project at ~/wa ...${NC}"
-mkdir -p "$BOTDIR"
-cd "$BOTDIR"
+mkdir -p "$BOTDIR" && cd "$BOTDIR"
 success "Folder ready: $BOTDIR"
 echo ""
 
@@ -113,17 +90,14 @@ while true; do
 done
 echo ""
 
-# ── Fetch available chat models live from Groq
+# ── Fetch available chat models live
 info "Fetching available models from your Groq account..."
-
 MODELS_JSON=$(curl -sf https://api.groq.com/openai/v1/models \
     -H "Authorization: Bearer $GROQ_KEY" 2>/dev/null) || true
 
 GROQ_MODEL=""
-
 if [[ -z "$MODELS_JSON" ]]; then
-    warn "Could not reach Groq API — check your key or internet."
-    warn "Defaulting to: openai/gpt-oss-20b"
+    warn "Could not reach Groq API — defaulting to: openai/gpt-oss-20b"
     GROQ_MODEL="openai/gpt-oss-20b"
 else
     mapfile -t CHAT_MODELS < <(
@@ -131,7 +105,7 @@ else
 import json, sys, re
 data = json.load(sys.stdin)
 exclude = re.compile(r'whisper|tts|guard|safeguard|orpheus|allam|embed', re.I)
-models = sorted([m['id'] for m in data.get('data', []) if not exclude.search(m['id'])])
+models = sorted([m['id'] for m in data.get('data',[]) if not exclude.search(m['id'])])
 print('\n'.join(models))
 " 2>/dev/null
     )
@@ -162,8 +136,8 @@ fi
 echo ""
 
 # ── Phone number
-ask "Your WhatsApp number (country code + number, no + or spaces):"
-echo -e "  India: 91XXXXXXXXXX | US: 1XXXXXXXXXX | UK: 44XXXXXXXXXX"
+ask "Your WhatsApp number (with country code, no + or spaces):"
+echo -e "  India: ${BOLD}91${NC}9876543210 | US: ${BOLD}1${NC}2025551234 | UK: ${BOLD}44${NC}7911123456"
 echo ""
 PHONE=""
 while true; do
@@ -173,16 +147,19 @@ while true; do
         success "Number: $PHONE"
         break
     else
-        warn "Digits only, 10–15 characters"
+        warn "Digits only, 10–15 characters, include country code"
     fi
 done
+
+# extract country code (first 1-3 digits heuristic)
+# we store full number and let bot do suffix matching — no strict extraction needed
 echo ""
 
 # ── Bot personality
 ask "Bot personality / system prompt (Enter for default):"
 read -rp "  Prompt: " SYS_PROMPT
 if [[ -z "${SYS_PROMPT:-}" ]]; then
-    SYS_PROMPT="You are a helpful assistant replying on behalf of the phone owner. Keep replies short and friendly."
+    SYS_PROMPT="You are Vineet's personal AI assistant on WhatsApp. Reply on his behalf — be concise, warm, and natural. Match the language the sender uses (Hindi, English, or Hinglish). Never reveal you are an AI unless directly asked. Keep replies under 3 sentences. Always start every reply with 🤖"
 fi
 SYS_PROMPT="${SYS_PROMPT//\\/\\\\}"
 SYS_PROMPT="${SYS_PROMPT//\"/\\\"}"
@@ -205,10 +182,7 @@ while true; do
 done
 echo ""
 
-# ── Contacts
-ALLOWED_JSON="[]"
-BLOCKED_JSON="[]"
-
+# ── Contacts helper
 build_json_array() {
     local -n arr=$1
     if [[ ${#arr[@]} -eq 0 ]]; then echo "[]"; return; fi
@@ -217,26 +191,25 @@ build_json_array() {
         json+="\"${arr[$i]}\""
         [[ $i -lt $((${#arr[@]}-1)) ]] && json+=","
     done
-    json+="]"
-    echo "$json"
+    json+="]"; echo "$json"
 }
 
+ALLOWED_JSON="[]"; BLOCKED_JSON="[]"
+
 if [[ "$MODE" == "whitelist" ]]; then
-    ask "Allowed contacts (only these get AI replies). Empty line to finish."
+    ask "Allowed contacts — enter with country code (e.g. 919876543210). Empty line to finish."
     ALLOWED_LIST=()
     while true; do
-        read -rp "  Number (Enter to finish): " NUM
-        NUM="${NUM//[^0-9]/}"
+        read -rp "  Number: " NUM; NUM="${NUM//[^0-9]/}"
         [[ -z "$NUM" ]] && break
         ALLOWED_LIST+=("$NUM"); success "Added $NUM"
     done
     ALLOWED_JSON="$(build_json_array ALLOWED_LIST)"
 else
-    ask "Blocked contacts (leave empty to reply everyone). Empty line to finish."
+    ask "Blocked contacts — enter with country code (e.g. 919876543210). Empty line to finish."
     BLOCKED_LIST=()
     while true; do
-        read -rp "  Number (Enter to finish): " NUM
-        NUM="${NUM//[^0-9]/}"
+        read -rp "  Number: " NUM; NUM="${NUM//[^0-9]/}"
         [[ -z "$NUM" ]] && break
         BLOCKED_LIST+=("$NUM"); success "Blocked $NUM"
     done
@@ -278,38 +251,46 @@ CFGEOF
 python3 -c "import json; json.load(open('config.json'))" \
     || error "config.json is invalid JSON — report this bug"
 
-# bot.py
+# ── bot.py ─────────────────────────────────────────────────────────────────────
 cat > bot.py << 'BOTEOF'
 #!/usr/bin/env python3
 """
-WhatsApp AI Autoresponder
-neonize + Groq API
-
+WhatsApp AI Autoresponder — neonize + Groq
 Author : Vineet <ci.vps@proton.me>
 GitHub : https://github.com/psvineet/wa
 License: MIT
 """
 
-import json, time, logging, sys, signal, requests
+import json, os, time, logging, sys, signal, requests
 from neonize.client import NewClient
 from neonize.events import MessageEv, ConnectedEv, PairStatusEv
 from neonize.utils import log as neonize_log
+
+# ── Paths (absolute so bot.log always lands in ~/wa/) ─────────────────────────
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LOG_FILE = os.path.join(BASE_DIR, "bot.log")
+DB_FILE  = os.path.join(BASE_DIR, "session.db")
+CFG_FILE = os.path.join(BASE_DIR, "config.json")
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [wa-bot %(levelname)s] - %(message)s",
     handlers=[
-        logging.FileHandler("bot.log"),
+        logging.FileHandler(LOG_FILE, encoding="utf-8"),
         logging.StreamHandler(sys.stdout)
     ]
 )
 log = logging.getLogger("wa-bot")
 neonize_log.setLevel(logging.WARNING)
 
+# suppress noisy neonize sub-loggers
+for _noisy in ("neonize.utils.ffmpeg", "neonize.utils", "whatsmeow"):
+    logging.getLogger(_noisy).setLevel(logging.CRITICAL)
+
 # ── Config ────────────────────────────────────────────────────────────────────
 try:
-    with open("config.json") as f:
+    with open(CFG_FILE) as f:
         cfg = json.load(f)
 except Exception as e:
     log.error(f"Cannot read config.json: {e}")
@@ -318,19 +299,37 @@ except Exception as e:
 GROQ_API_KEY   = cfg["groq_api_key"]
 GROQ_MODEL     = cfg["groq_model"]
 SYSTEM_PROMPT  = cfg["system_prompt"]
-PHONE_NUMBER   = cfg["phone_number"]
+PHONE_NUMBER   = cfg["phone_number"].strip()
 MODE           = cfg["mode"]
-ALLOWED        = set(cfg.get("allowed_contacts", []))
-BLOCKED        = set(cfg.get("blocked_contacts", []))
+ALLOWED        = [n.strip() for n in cfg.get("allowed_contacts", [])]
+BLOCKED        = [n.strip() for n in cfg.get("blocked_contacts", [])]
 ALLOW_GROUPS   = cfg.get("allow_groups", False)
-ALLOWED_GROUPS = set(cfg.get("allowed_groups", []))
-BLOCKED_GROUPS = set(cfg.get("blocked_groups", []))
+ALLOWED_GROUPS = [n.strip() for n in cfg.get("allowed_groups", [])]
+BLOCKED_GROUPS = [n.strip() for n in cfg.get("blocked_groups", [])]
 IGNORE_OWN     = cfg.get("ignore_own_messages", True)
 REPLY_DELAY    = cfg.get("reply_delay_seconds", 1)
 
 if not GROQ_API_KEY.startswith("gsk_"):
     log.error("groq_api_key must start with 'gsk_' — check config.json")
     sys.exit(1)
+
+# ── Number normalisation + matching ───────────────────────────────────────────
+def norm(number: str) -> str:
+    """Strip non-digits and leading zeros/plus."""
+    return number.strip().lstrip('+').lstrip('0').strip()
+
+def numbers_match(stored: str, jid_num: str) -> bool:
+    """
+    Match phone numbers regardless of country-code prefix.
+    E.g. stored='9876543210' matches jid_num='919876543210' (India prefix 91).
+    Also handles full match when both have country code.
+    """
+    s = norm(stored)
+    j = norm(jid_num)
+    return j == s or j.endswith(s) or s.endswith(j)
+
+def in_list(jid_num: str, number_list: list) -> bool:
+    return any(numbers_match(n, jid_num) for n in number_list)
 
 # ── Groq ──────────────────────────────────────────────────────────────────────
 def ask_groq(user_message: str):
@@ -363,12 +362,10 @@ def ask_groq(user_message: str):
         status = e.response.status_code if e.response is not None else "?"
         body   = e.response.text[:300]  if e.response is not None else str(e)
         if status == 401:
-            log.error("Groq 401 — API key invalid or revoked. Update config.json and restart.")
+            log.error("Groq 401 — API key invalid. Update config.json and restart.")
         elif status == 404:
-            log.error(
-                f"Groq 404 — model '{GROQ_MODEL}' not found on your account.\n"
-                f"  Run: bash ~/wa/run.sh --list-models"
-            )
+            log.error(f"Groq 404 — model '{GROQ_MODEL}' not on your account. "
+                      f"Run: ~/wa/run.sh --list-models")
         elif status == 429:
             log.warning("Groq rate limit — waiting 10s")
             time.sleep(10)
@@ -395,28 +392,43 @@ def jid_number(jid: str) -> str:
 def is_group(jid: str) -> bool:
     return jid.endswith("@g.us")
 
+def is_lid(jid: str) -> bool:
+    """LID JIDs (@lid) carry a Meta internal ID, not a phone number."""
+    return jid.endswith("@lid")
+
 # ── Filter ────────────────────────────────────────────────────────────────────
 def should_reply(sender_jid: str, chat_jid: str) -> bool:
-    if IGNORE_OWN and jid_number(sender_jid) == PHONE_NUMBER:
+    # ignore own messages
+    if IGNORE_OWN and numbers_match(PHONE_NUMBER, jid_number(sender_jid)):
         return False
+
+    # group handling
     if is_group(chat_jid):
         if not ALLOW_GROUPS:
             return False
         gid = jid_number(chat_jid)
-        if BLOCKED_GROUPS and gid in BLOCKED_GROUPS:
+        if BLOCKED_GROUPS and in_list(gid, BLOCKED_GROUPS):
             return False
-        if ALLOWED_GROUPS and gid not in ALLOWED_GROUPS:
+        if ALLOWED_GROUPS and not in_list(gid, ALLOWED_GROUPS):
             return False
         return True
+
+    # LID JIDs — phone number unknown, cannot match against list
+    if is_lid(sender_jid):
+        # blacklist: unknown = not blocked → reply
+        # whitelist: unknown = not confirmed → skip
+        return MODE == "blacklist"
+
     number = jid_number(sender_jid)
+
     if MODE == "whitelist":
-        return number in ALLOWED
+        return in_list(number, ALLOWED)
     if MODE == "blacklist":
-        return number not in BLOCKED
+        return not in_list(number, BLOCKED)
     return True
 
 # ── Client ────────────────────────────────────────────────────────────────────
-client = NewClient("session.db")
+client = NewClient(DB_FILE)
 
 @client.event(ConnectedEv)
 def on_connected(_c, _e):
@@ -443,7 +455,7 @@ def on_message(_c, message: MessageEv):
         ).strip()
 
         if not text:
-            return
+            return  # skip media, stickers, voice notes
 
         log.info(f"📩 {jid_number(sender_jid)}: {text[:80]}")
 
@@ -479,6 +491,7 @@ if __name__ == "__main__":
     log.info(f"   Mode   : {MODE}")
     log.info(f"   Groups : {'on' if ALLOW_GROUPS else 'off'}")
     log.info(f"   Model  : {GROQ_MODEL}")
+    log.info(f"   Log    : {LOG_FILE}")
     log.info("")
     log.info("👉 Scan QR: Phone → Linked Devices → Link Device")
     log.info("")
@@ -500,20 +513,20 @@ if __name__ == "__main__":
     log.info("Stopped.")
 BOTEOF
 
-# run.sh
+# ── run.sh ─────────────────────────────────────────────────────────────────────
 cat > run.sh << 'RUNEOF'
 #!/bin/bash
 # WhatsApp AI Bot — launcher
-# Always activates the venv automatically.
+# Activates venv automatically. Never run bot.py directly.
 # Usage:
-#   ./run.sh               start the bot
-#   ./run.sh --list-models list chat models available on your Groq key
+#   ./run.sh                 start the bot
+#   ./run.sh --list-models   list chat models on your Groq account
 
 BOTDIR="$(cd "$(dirname "$0")" && pwd)"
 VENV="$BOTDIR/venv"
 
 if [[ ! -f "$VENV/bin/activate" ]]; then
-    echo "❌ Virtualenv not found. Run setup.sh first."
+    echo "❌ Virtualenv not found at $VENV — run setup.sh first."
     exit 1
 fi
 
@@ -535,9 +548,13 @@ if [[ "${1:-}" == "--list-models" ]]; then
 import json, sys, re
 data = json.load(sys.stdin)
 exclude = re.compile(r'whisper|tts|guard|safeguard|orpheus|allam|embed', re.I)
-models = sorted([m['id'] for m in data.get('data', []) if not exclude.search(m['id'])])
+models = sorted([m['id'] for m in data.get('data',[]) if not exclude.search(m['id'])])
 [print(f'  - {m}') for m in models]
 "
+    echo ""
+    echo "  To change model:"
+    echo "    nano $BOTDIR/config.json   # update groq_model"
+    echo "    $BOTDIR/run.sh"
     echo ""
     exit 0
 fi
@@ -547,17 +564,12 @@ exec python3 bot.py
 RUNEOF
 chmod +x run.sh
 
-# remove.sh
+# ── remove.sh ──────────────────────────────────────────────────────────────────
 cat > remove.sh << 'RMEOF'
 #!/bin/bash
 # WhatsApp AI Bot — uninstaller
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BOLD='\033[1m'
-NC='\033[0m'
-
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'
 BOTDIR="$HOME/wa"
 
 echo ""
@@ -565,19 +577,15 @@ echo -e "${BOLD}${RED}  WhatsApp AI Bot — Uninstaller${NC}"
 echo "  ─────────────────────────────────────────"
 echo ""
 echo -e "${YELLOW}  This will remove:${NC}"
-echo "    • Systemd service (wa-bot)"
-echo "    • Bot files: $BOTDIR"
+echo "    • Systemd service  : wa-bot"
+echo "    • Bot directory    : $BOTDIR"
 echo ""
 read -rp "  Are you sure? Type YES to confirm: " CONFIRM
-if [[ "$CONFIRM" != "YES" ]]; then
-    echo "  Cancelled."
-    exit 0
-fi
+[[ "$CONFIRM" != "YES" ]] && echo "  Cancelled." && exit 0
 echo ""
 
-# stop + disable service
 if command -v systemctl &>/dev/null; then
-    if systemctl list-unit-files wa-bot.service &>/dev/null; then
+    if systemctl list-unit-files wa-bot.service &>/dev/null 2>&1; then
         echo -e "${YELLOW}  Stopping service...${NC}"
         sudo systemctl stop    wa-bot 2>/dev/null || true
         sudo systemctl disable wa-bot 2>/dev/null || true
@@ -587,10 +595,8 @@ if command -v systemctl &>/dev/null; then
     fi
 fi
 
-# kill any running bot.py
 pkill -f bot.py 2>/dev/null || true
 
-# remove bot directory
 if [[ -d "$BOTDIR" ]]; then
     rm -rf "$BOTDIR"
     echo -e "${GREEN}  ✓ Removed $BOTDIR${NC}"
@@ -602,7 +608,7 @@ echo ""
 RMEOF
 chmod +x remove.sh
 
-# systemd service
+# ── systemd service (uses run.sh so venv always active) ────────────────────────
 WHOAMI=$(whoami)
 cat > wa-bot.service << SVCEOF
 [Unit]
@@ -630,14 +636,11 @@ echo ""
 
 # ── Step 5: Virtualenv + packages ──────────────────────────────────────────────
 echo -e "${YELLOW}[5/7] Creating virtualenv and installing packages...${NC}"
-
 python -m venv venv || python3 -m venv venv || error "venv creation failed"
 # shellcheck disable=SC1091
 source venv/bin/activate
-
 pip install --upgrade pip -q
 pip install neonize requests -q
-
 python -c "import neonize, requests" || error "Package import failed — check pip output"
 success "Packages installed and verified"
 echo ""
@@ -659,7 +662,7 @@ if [[ ! "${SVC_CHOICE:-}" =~ ^[Nn]$ ]]; then
         warn "systemd not found — skipping"
     fi
 else
-    warn "Skipped. Use ./run.sh to start manually."
+    warn "Skipped. Start anytime with: ~/wa/run.sh"
 fi
 echo ""
 
@@ -675,11 +678,12 @@ echo -e "  Phone → ⋮ Menu → Linked Devices → Link Device"
 echo ""
 
 if [[ "$INSTALL_SERVICE" == true ]]; then
-    warn "After QR scan — press Ctrl+C. Systemd will keep it running."
-    echo -e "  Logs : sudo journalctl -u wa-bot -f"
-    echo -e "  Stop : sudo systemctl stop wa-bot"
+    warn "After QR scan — press Ctrl+C once. Systemd will keep it running."
+    echo -e "  Logs   : sudo journalctl -u wa-bot -f"
+    echo -e "  Stop   : sudo systemctl stop wa-bot"
+    echo -e "  Remove : bash ~/wa/remove.sh"
 else
-    warn "Press Ctrl+C to stop. Next time just run: ${BOLD}~/wa/run.sh${NC}"
+    warn "Press Ctrl+C to stop. Next time start with: ${BOLD}~/wa/run.sh${NC}"
 fi
 echo ""
 
@@ -691,7 +695,7 @@ if [[ "$INSTALL_SERVICE" == true ]]; then
     info "Handing off to systemd..."
     sudo systemctl start wa-bot || true
     success "Bot running in background"
-    echo -e "  Logs : sudo journalctl -u wa-bot -f"
-    echo -e "  Stop : sudo systemctl stop wa-bot"
-    echo -e "  Remove: bash ~/wa/remove.sh"
+    echo -e "  Logs   : sudo journalctl -u wa-bot -f"
+    echo -e "  Stop   : sudo systemctl stop wa-bot"
+    echo -e "  Remove : bash ~/wa/remove.sh"
 fi
