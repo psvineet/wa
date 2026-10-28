@@ -43,7 +43,7 @@ PKG_INSTALLED=false
 
 if command -v pacman &>/dev/null; then
     info "Distro: Arch / Manjaro"
-    sudo pacman -Sy --noconfirm python python-pip python-virtualenv
+    sudo pacman -Sy --noconfirm python python-pip python-virtualenv curl
     PKG_INSTALLED=true
 
 elif command -v apt-get &>/dev/null; then
@@ -84,9 +84,7 @@ if ! command -v python &>/dev/null; then
     sudo ln -sf "$PYTHON3_PATH" /usr/bin/python 2>/dev/null || true
 fi
 
-# verify python works
 python --version &>/dev/null || error "python3 not found after install. Check your system."
-
 success "Packages installed"
 echo ""
 
@@ -103,17 +101,17 @@ echo -e "${YELLOW}[3/6] Configuration${NC}"
 echo "  ─────────────────────────────────────────"
 echo ""
 
-# ── Groq API key
+# ── Groq API key ──────────────────────────────────────────────────────────────
 ask "Get your FREE Groq API key at:"
 echo -e "  ${BOLD}https://console.groq.com${NC}"
-echo -e "  Signup → API Keys → Create New Key (no credit card)"
+echo -e "  Signup → API Keys → Create New Key (no credit card needed)"
 echo ""
 GROQ_KEY=""
 while true; do
     read -rp "  Paste Groq API key: " GROQ_KEY
-    GROQ_KEY="${GROQ_KEY// /}"  # strip spaces
+    GROQ_KEY="${GROQ_KEY// /}"
     if [[ "$GROQ_KEY" == gsk_* && ${#GROQ_KEY} -gt 20 ]]; then
-        success "Key valid"
+        success "Key format valid — verifying with Groq..."
         break
     else
         warn "Key must start with 'gsk_' and be complete — try again"
@@ -121,35 +119,92 @@ while true; do
 done
 echo ""
 
-# ── Phone number
+# ── Fetch available chat models from Groq ────────────────────────────────────
+info "Fetching available models from your Groq account..."
+
+# excluded: audio/speech, guard, embedding, TTS, safety-only models
+EXCLUDE_PATTERN="whisper|tts|guard|safeguard|orpheus|allam|embed"
+
+MODELS_JSON=$(curl -sf https://api.groq.com/openai/v1/models \
+    -H "Authorization: Bearer $GROQ_KEY" 2>/dev/null) || true
+
+if [[ -z "$MODELS_JSON" ]]; then
+    warn "Could not reach Groq API. Check your internet / API key."
+    warn "Falling back to: openai/gpt-oss-20b"
+    GROQ_MODEL="openai/gpt-oss-20b"
+else
+    # Filter to text/chat models only, sorted
+    mapfile -t CHAT_MODELS < <(
+        echo "$MODELS_JSON" \
+        | python3 -c "
+import json, sys, re
+data = json.load(sys.stdin)
+exclude = re.compile(r'whisper|tts|guard|safeguard|orpheus|allam|embed', re.I)
+models = [m['id'] for m in data.get('data', []) if not exclude.search(m['id'])]
+models.sort()
+print('\n'.join(models))
+" 2>/dev/null
+    )
+
+    if [[ ${#CHAT_MODELS[@]} -eq 0 ]]; then
+        warn "No chat models found. Check your API key permissions."
+        warn "Falling back to: openai/gpt-oss-20b"
+        GROQ_MODEL="openai/gpt-oss-20b"
+    else
+        echo ""
+        echo -e "  ${BOLD}Available chat models on your account:${NC}"
+        echo ""
+        for i in "${!CHAT_MODELS[@]}"; do
+            printf "  ${CYAN}%2d)${NC} %s\n" "$((i+1))" "${CHAT_MODELS[$i]}"
+        done
+        echo ""
+
+        GROQ_MODEL=""
+        while true; do
+            read -rp "  Choose model number [1-${#CHAT_MODELS[@]}]: " MODEL_CHOICE
+            if [[ "$MODEL_CHOICE" =~ ^[0-9]+$ ]] \
+               && [[ "$MODEL_CHOICE" -ge 1 ]] \
+               && [[ "$MODEL_CHOICE" -le ${#CHAT_MODELS[@]} ]]; then
+                GROQ_MODEL="${CHAT_MODELS[$((MODEL_CHOICE-1))]}"
+                success "Model: $GROQ_MODEL"
+                break
+            else
+                warn "Enter a number between 1 and ${#CHAT_MODELS[@]}"
+            fi
+        done
+    fi
+fi
+echo ""
+
+# ── Phone number ──────────────────────────────────────────────────────────────
 ask "Your WhatsApp number (country code + number, no + or spaces):"
 echo -e "  India: 91XXXXXXXXXX | US: 1XXXXXXXXXX | UK: 44XXXXXXXXXX"
 echo ""
 PHONE=""
 while true; do
     read -rp "  Phone number: " PHONE
-    PHONE="${PHONE//[^0-9]/}"  # digits only
+    PHONE="${PHONE//[^0-9]/}"
     if [[ ${#PHONE} -ge 10 && ${#PHONE} -le 15 ]]; then
         success "Number: $PHONE"
         break
     else
-        warn "Invalid — digits only, 10-15 characters"
+        warn "Invalid — digits only, 10–15 characters"
     fi
 done
 echo ""
 
-# ── Bot personality
+# ── Bot personality ───────────────────────────────────────────────────────────
 ask "Bot personality / system prompt (Enter for default):"
 read -rp "  Prompt: " SYS_PROMPT
 if [[ -z "${SYS_PROMPT:-}" ]]; then
     SYS_PROMPT="You are a helpful assistant replying on behalf of the phone owner. Keep replies short and friendly."
 fi
-# escape double quotes for JSON safety
-SYS_PROMPT="${SYS_PROMPT//\"/\\\"}"
+SYS_PROMPT="${SYS_PROMPT//\\/\\\\}"   # escape backslashes first
+SYS_PROMPT="${SYS_PROMPT//\"/\\\"}"   # then escape double quotes
 success "Prompt set"
 echo ""
 
-# ── Reply mode
+# ── Reply mode ────────────────────────────────────────────────────────────────
 ask "Reply mode:"
 echo "  1) blacklist — reply everyone EXCEPT blocked numbers (recommended)"
 echo "  2) whitelist — reply ONLY specific numbers"
@@ -165,16 +220,13 @@ while true; do
 done
 echo ""
 
-# ── Contacts
+# ── Contacts ──────────────────────────────────────────────────────────────────
 ALLOWED_JSON="[]"
 BLOCKED_JSON="[]"
 
 build_json_array() {
     local -n arr=$1
-    if [[ ${#arr[@]} -eq 0 ]]; then
-        echo "[]"
-        return
-    fi
+    if [[ ${#arr[@]} -eq 0 ]]; then echo "[]"; return; fi
     local json="["
     for i in "${!arr[@]}"; do
         json+="\"${arr[$i]}\""
@@ -186,7 +238,7 @@ build_json_array() {
 
 if [[ "$MODE" == "whitelist" ]]; then
     ask "Allowed contacts (only these get AI replies):"
-    echo -e "  Enter one number per line. Empty line to finish."
+    echo -e "  Enter one number per line. Empty line when done."
     ALLOWED_LIST=()
     while true; do
         read -rp "  Number (Enter to finish): " NUM
@@ -198,7 +250,7 @@ if [[ "$MODE" == "whitelist" ]]; then
     ALLOWED_JSON="$(build_json_array ALLOWED_LIST)"
 else
     ask "Blocked contacts (leave empty to reply everyone):"
-    echo -e "  Enter one number per line. Empty line to finish."
+    echo -e "  Enter one number per line. Empty line when done."
     BLOCKED_LIST=()
     while true; do
         read -rp "  Number (Enter to finish): " NUM
@@ -211,7 +263,7 @@ else
 fi
 echo ""
 
-# ── Groups
+# ── Groups ────────────────────────────────────────────────────────────────────
 ask "Reply in WhatsApp groups?"
 read -rp "  Enable group replies? [y/N]: " GRP
 if [[ "${GRP:-}" =~ ^[Yy]$ ]]; then
@@ -230,7 +282,7 @@ echo -e "${YELLOW}[4/6] Writing bot files...${NC}"
 cat > config.json << CFGEOF
 {
   "groq_api_key": "$GROQ_KEY",
-  "groq_model": "llama-3.1-8b-instant",
+  "groq_model": "$GROQ_MODEL",
   "system_prompt": "$SYS_PROMPT",
   "phone_number": "$PHONE",
   "mode": "$MODE",
@@ -244,8 +296,7 @@ cat > config.json << CFGEOF
 }
 CFGEOF
 
-# validate config JSON
-python -c "import json; json.load(open('config.json'))" \
+python3 -c "import json; json.load(open('config.json'))" \
     || error "config.json is invalid JSON — report this bug"
 
 # bot.py
@@ -253,7 +304,7 @@ cat > bot.py << 'BOTEOF'
 #!/usr/bin/env python3
 """
 WhatsApp AI Autoresponder
-neonize + Groq free API
+neonize + Groq API
 
 Author : Vineet <ci.vps@proton.me>
 GitHub : https://github.com/psvineet/wa
@@ -265,16 +316,19 @@ from neonize.client import NewClient
 from neonize.events import MessageEv, ConnectedEv, PairStatusEv
 from neonize.utils import log as neonize_log
 
-# Logging
+# ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.FileHandler("bot.log"), logging.StreamHandler(sys.stdout)]
+    format="%(asctime)s [wa-bot %(levelname)s] - %(message)s",
+    handlers=[
+        logging.FileHandler("bot.log"),
+        logging.StreamHandler(sys.stdout)
+    ]
 )
 log = logging.getLogger("wa-bot")
 neonize_log.setLevel(logging.WARNING)
 
-# Config
+# ── Config ────────────────────────────────────────────────────────────────────
 try:
     with open("config.json") as f:
         cfg = json.load(f)
@@ -295,12 +349,12 @@ BLOCKED_GROUPS = set(cfg.get("blocked_groups", []))
 IGNORE_OWN     = cfg.get("ignore_own_messages", True)
 REPLY_DELAY    = cfg.get("reply_delay_seconds", 1)
 
-# Validate key
 if not GROQ_API_KEY.startswith("gsk_"):
-    log.error("groq_api_key in config.json looks wrong — must start with gsk_")
+    log.error("groq_api_key must start with 'gsk_' — check config.json")
     sys.exit(1)
 
-def ask_groq(user_message: str) -> str:
+# ── Groq ──────────────────────────────────────────────────────────────────────
+def ask_groq(user_message: str):
     try:
         resp = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
@@ -321,48 +375,75 @@ def ask_groq(user_message: str) -> str:
         )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"].strip()
+
     except requests.exceptions.Timeout:
-        log.warning("Groq timeout")
-        return "Sorry, slow right now. Try again!"
+        log.warning("Groq timeout — skipping reply")
+        return None
+
     except requests.exceptions.HTTPError as e:
-        status = e.response.status_code if e.response else "?"
+        if e.response is not None:
+            status = e.response.status_code
+            body   = e.response.text[:300]
+        else:
+            status, body = "?", str(e)
+
         if status == 401:
-            log.error("Groq 401 — API key invalid. Update config.json")
+            log.error("Groq 401 — API key invalid or revoked. Update config.json and restart.")
+        elif status == 404:
+            log.error(f"Groq 404 — model '{GROQ_MODEL}' not found on your account. "
+                      f"Run: python3 -c \"import requests,json; "
+                      f"[print(m['id']) for m in requests.get('https://api.groq.com/openai/v1/models',"
+                      f"headers={{'Authorization':'Bearer {GROQ_API_KEY}'}}).json()['data']]\"")
         elif status == 429:
-            log.warning("Groq rate limit hit — waiting 10s")
+            log.warning("Groq rate limit — waiting 10s")
             time.sleep(10)
         else:
-            log.error(f"Groq HTTP {status}: {e}")
+            log.error(f"Groq HTTP {status}: {body}")
         return None
+
     except Exception as e:
         log.error(f"Groq error: {e}")
         return None
 
-def extract_number(jid: str) -> str:
+# ── JID helpers ───────────────────────────────────────────────────────────────
+def jid_to_str(jid_obj) -> str:
+    """Convert a neonize JID proto object to a clean string."""
+    try:
+        user   = jid_obj.User or ""
+        server = jid_obj.Server or "s.whatsapp.net"
+        return f"{user}@{server}"
+    except Exception:
+        return str(jid_obj)
+
+def jid_number(jid: str) -> str:
     return jid.split("@")[0]
 
 def is_group(jid: str) -> bool:
-    return "@g.us" in jid
+    return jid.endswith("@g.us")
 
+# ── Filter logic ──────────────────────────────────────────────────────────────
 def should_reply(sender_jid: str, chat_jid: str) -> bool:
-    if IGNORE_OWN and extract_number(sender_jid) == PHONE_NUMBER:
+    if IGNORE_OWN and jid_number(sender_jid) == PHONE_NUMBER:
         return False
+
     if is_group(chat_jid):
         if not ALLOW_GROUPS:
             return False
-        gid = extract_number(chat_jid)
+        gid = jid_number(chat_jid)
         if BLOCKED_GROUPS and gid in BLOCKED_GROUPS:
             return False
         if ALLOWED_GROUPS and gid not in ALLOWED_GROUPS:
             return False
         return True
-    number = extract_number(sender_jid)
+
+    number = jid_number(sender_jid)
     if MODE == "whitelist":
         return number in ALLOWED
     if MODE == "blacklist":
         return number not in BLOCKED
     return True
 
+# ── Client ────────────────────────────────────────────────────────────────────
 client = NewClient("session.db")
 
 @client.event(ConnectedEv)
@@ -371,32 +452,32 @@ def on_connected(_c, _e):
 
 @client.event(PairStatusEv)
 def on_pair(_c, e):
-    log.info(f"📱 Paired: {e.ID.User}")
+    log.info(f"📱 Paired as: {e.ID.User}")
 
 @client.event(MessageEv)
 def on_message(_c, message: MessageEv):
     try:
         info       = message.Info
-        chat_jid   = str(info.MessageSource.Chat)
-        sender_jid = str(info.MessageSource.Sender)
+        chat_jid   = jid_to_str(info.MessageSource.Chat)
+        sender_jid = jid_to_str(info.MessageSource.Sender)
 
         if info.MessageSource.IsFromMe:
             return
 
-        # extract text
-        text = ""
-        if message.Message.conversation:
-            text = message.Message.conversation
-        elif message.Message.extendedTextMessage.text:
-            text = message.Message.extendedTextMessage.text
+        # extract text (plain or extended)
+        text = (
+            message.Message.conversation
+            or message.Message.extendedTextMessage.text
+            or ""
+        ).strip()
 
-        if not text.strip():
-            return  # skip media, stickers, voice
+        if not text:
+            return  # skip media, stickers, voice notes
 
-        log.info(f"📩 {sender_jid}: {text[:80]}")
+        log.info(f"📩 {jid_number(sender_jid)}: {text[:80]}")
 
         if not should_reply(sender_jid, chat_jid):
-            log.info(f"⏭️  Skipped: {sender_jid}")
+            log.info(f"⏭  Skipped {jid_number(sender_jid)}")
             return
 
         if REPLY_DELAY > 0:
@@ -410,6 +491,7 @@ def on_message(_c, message: MessageEv):
     except Exception as e:
         log.error(f"Message handler error: {e}", exc_info=True)
 
+# ── Main (with auto-reconnect) ────────────────────────────────────────────────
 if __name__ == "__main__":
     log.info("🚀 WhatsApp AI Bot starting...")
     log.info(f"   Mode   : {MODE}")
@@ -418,10 +500,19 @@ if __name__ == "__main__":
     log.info("")
     log.info("👉 Scan QR with WhatsApp: Linked Devices → Link Device")
     log.info("")
-    client.connect()
+
+    while True:
+        try:
+            client.connect()
+        except KeyboardInterrupt:
+            log.info("Stopped by user.")
+            sys.exit(0)
+        except Exception as e:
+            log.error(f"Disconnected: {e} — reconnecting in 5s...")
+            time.sleep(5)
 BOTEOF
 
-# systemd service file
+# systemd service
 WHOAMI=$(whoami)
 cat > wa-bot.service << SVCEOF
 [Unit]
@@ -457,9 +548,7 @@ source venv/bin/activate
 pip install --upgrade pip -q
 pip install neonize requests -q
 
-# verify imports
 python -c "import neonize, requests" || error "Package import failed after install"
-
 success "Packages installed and verified"
 echo ""
 
@@ -480,11 +569,11 @@ if [[ ! "${SVC_CHOICE:-}" =~ ^[Nn]$ ]]; then
         warn "systemd not found — skipping service install"
     fi
 else
-    warn "Skipped. Start manually: cd ~/wa && source venv/bin/activate && python bot.py"
+    warn "Skipped. Run manually: cd ~/wa && source venv/bin/activate && python bot.py"
 fi
 echo ""
 
-# ── Launch ─────────────────────────────────────────────────────────────────────
+# ── Done ──────────────────────────────────────────────────────────────────────
 echo -e "${BOLD}${GREEN}============================================${NC}"
 echo -e "${BOLD}${GREEN}  ✅ Setup complete! Launching bot...      ${NC}"
 echo -e "${BOLD}${GREEN}============================================${NC}"
@@ -494,19 +583,17 @@ echo -e "  Phone → ⋮ Menu → Linked Devices → Link Device"
 echo ""
 
 if [[ "$INSTALL_SERVICE" == true ]]; then
-    warn "After QR scan — press Ctrl+C. Systemd keeps it alive."
+    warn "After QR scan — press Ctrl+C. Systemd keeps it alive automatically."
     echo -e "  Logs: sudo journalctl -u wa-bot -f"
 else
     warn "Press Ctrl+C anytime to stop."
 fi
 echo ""
 
-# activate venv and run
 cd "$BOTDIR"
 source venv/bin/activate
 python bot.py || true
 
-# hand off to systemd if installed
 if [[ "$INSTALL_SERVICE" == true ]]; then
     echo ""
     info "Handing off to systemd..."
