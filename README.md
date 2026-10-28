@@ -1,3 +1,4 @@
+
 # 🤖 WhatsApp AI Autoresponder
 
 Auto-reply to WhatsApp messages using a free AI (Groq) — runs on any Linux server with 1GB RAM. No browser, no GUI, no paid API.
@@ -7,18 +8,22 @@ Auto-reply to WhatsApp messages using a free AI (Groq) — runs on any Linux ser
 ## ✨ Features
 
 - 🔁 Auto-replies using **Groq free API**
+- 👤 **Strangers-Only mode** — reply strictly to unsaved/unknown numbers while ignoring saved address book contacts
 - 🎯 **Live model picker** — fetches your account's models at setup, pick by number
 - 📱 **No QR GUI** — scans via terminal ASCII QR
 - 🧠 Custom bot personality via system prompt
 - ✅ **Whitelist mode** — reply only to specific contacts
 - 🚫 **Blacklist mode** — reply everyone except blocked numbers
+- 🔒 **Privacy JID (`@lid`) Resolution** — resolves Meta internal privacy IDs to phone numbers seamlessly
+- ⚡ **Zero Token Consumption on Skip** — skipped contacts or blocked numbers never call the API
 - 🌍 **Country code aware** — works with or without country code prefix in contact lists
 - 👥 Group chat support (optional)
 - 💾 Session saved — no re-scan on restart
 - 🔄 Auto-reconnect on disconnect + clean Ctrl+C shutdown
+- 🧹 **Database Auto-Deduplication** — cleans `session.db` and optimizes SQLite on every startup
 - 🚀 `run.sh` — one-command start, venv auto-activated
 - 🗑️ `remove.sh` — clean uninstaller
-- 🔇 No noisy ffmpeg / neonize warnings in logs
+- 🔇 Single-line clean logging without duplicate logs or noisy ffmpeg/neonize warnings
 - 🔄 Auto-restart via systemd
 - 🪶 Lightweight — ~100MB RAM
 - 🐧 Arch, Ubuntu, Debian, Fedora, CentOS, openSUSE, Alpine
@@ -37,18 +42,21 @@ Auto-reply to WhatsApp messages using a free AI (Groq) — runs on any Linux ser
 ## 🚀 Quick Setup (one command)
 
 ```bash
-bash <(curl -s https://raw.githubusercontent.com/psvineet/wa/main/setup.sh)
+bash <(curl -s [https://raw.githubusercontent.com/psvineet/wa/main/setup.sh](https://raw.githubusercontent.com/psvineet/wa/main/setup.sh))
+
 ```
 
 The wizard will ask:
+
 1. **Groq API key** — free at [console.groq.com](https://console.groq.com)
 2. **AI model** — fetched live from your account, pick by number
 3. **Phone number** — with country code, no `+` (e.g. `919876543210`)
 4. **Bot personality** — custom system prompt or press Enter for default
-5. **Reply mode** — blacklist or whitelist
-6. **Contacts** — numbers to allow or block (with country code)
-7. **Groups** — enable/disable group replies
-8. **Systemd service** — auto-start on boot (optional)
+5. **Target audience** — reply to strangers only (unsaved numbers) or everyone
+6. **Reply mode** — blacklist or whitelist
+7. **Contacts** — numbers to allow or block (with country code)
+8. **Groups** — enable/disable group replies
+9. **Systemd service** — auto-start on boot (optional)
 
 Everything else — `bot.py`, `run.sh`, `remove.sh` — is written automatically.
 
@@ -62,20 +70,22 @@ Everything else — `bot.py`, `run.sh`, `remove.sh` — is written automatically
 ├── config.json     # All settings
 ├── run.sh          # Start the bot — handles venv automatically
 ├── remove.sh       # Clean uninstaller
-├── session.db      # WA session (auto-created on first scan)
+├── session.db      # WA session & SQLite contacts table (auto-created on first scan)
 ├── bot.log         # Full logs
 ├── venv/           # Python virtualenv
 └── wa-bot.service  # Systemd unit file
+
 ```
 
 ---
 
 ## ▶️ Running the Bot
 
-**Always use `run.sh`** — it activates the venv so you never get `ModuleNotFoundError`:
+**Always use `run.sh**` — it activates the venv so you never get `ModuleNotFoundError`:
 
 ```bash
 ~/wa/run.sh
+
 ```
 
 > ⚠️ Never run `python bot.py` directly — you'll get `ModuleNotFoundError: No module named 'neonize'` unless you manually activated the venv.
@@ -88,9 +98,10 @@ Everything else — `bot.py`, `run.sh`, `remove.sh` — is written automatically
 {
   "groq_api_key": "gsk_...",
   "groq_model": "openai/gpt-oss-20b",
-  "system_prompt": "You are Vineet's personal AI assistant...",
+  "system_prompt": "You are a personal AI assistant...",
   "phone_number": "919876543210",
 
+  "only_reply_to_strangers": true,
   "mode": "blacklist",
 
   "allowed_contacts": ["919999999999"],
@@ -103,11 +114,13 @@ Everything else — `bot.py`, `run.sh`, `remove.sh` — is written automatically
   "ignore_own_messages": true,
   "reply_delay_seconds": 1
 }
+
 ```
 
 | Field | Description |
-|---|---|
+| --- | --- |
 | `groq_model` | Model ID — must exist on your Groq account |
+| `only_reply_to_strangers` | `true` skips saved phone contacts; `false` replies to all |
 | `mode` | `"whitelist"` or `"blacklist"` |
 | `allowed_contacts` | Numbers to reply — with or without country code |
 | `blocked_contacts` | Numbers to skip — with or without country code |
@@ -117,14 +130,18 @@ Everything else — `bot.py`, `run.sh`, `remove.sh` — is written automatically
 | `reply_delay_seconds` | Delay before replying (feels more human) |
 
 **List models on your account:**
+
 ```bash
 ~/wa/run.sh --list-models
+
 ```
 
 **Change model:**
+
 ```bash
 nano ~/wa/config.json   # update groq_model
 ~/wa/run.sh
+
 ```
 
 ---
@@ -150,6 +167,41 @@ sudo journalctl -u wa-bot -f
 
 # File logs
 tail -f ~/wa/bot.log
+
+```
+
+---
+
+## 🛠️ Database Inspection & Maintenance
+
+WhatsApp saves contact app state metadata into `session.db`. Use these terminal commands to view or sanitize your contact records:
+
+**View All Synced Contacts:**
+
+```bash
+sqlite3 -header -column ~/wa/session.db "SELECT distinct their_jid AS JID, full_name AS Name FROM whatsmeow_contacts WHERE full_name IS NOT NULL AND full_name != '' ORDER BY full_name;"
+
+```
+
+**Count Total Saved Contacts:**
+
+```bash
+sqlite3 ~/wa/session.db "SELECT COUNT(DISTINCT their_jid) FROM whatsmeow_contacts WHERE (full_name IS NOT NULL AND full_name != '') OR (first_name IS NOT NULL AND first_name != '');"
+
+```
+
+**Check a Specific Phone Number:**
+
+```bash
+sqlite3 ~/wa/session.db "SELECT * FROM whatsmeow_contacts WHERE their_jid LIKE '%919876543210%';"
+
+```
+
+**Purge Stale/Deleted Contact Cache & Vacuum Database:**
+
+```bash
+sqlite3 ~/wa/session.db "DELETE FROM whatsmeow_contacts WHERE (full_name IS NULL OR full_name = '') AND (first_name IS NULL OR first_name = ''); VACUUM;"
+
 ```
 
 ---
@@ -158,6 +210,7 @@ tail -f ~/wa/bot.log
 
 ```bash
 bash ~/wa/remove.sh
+
 ```
 
 Stops the service, removes `~/wa/` completely, and cleans up systemd.
@@ -181,6 +234,7 @@ On first run a QR code appears in terminal:
 
 ```
 Phone → ⋮ Menu → Linked Devices → Link Device → Scan QR
+
 ```
 
 Session saved to `session.db` — no re-scan on restart.
@@ -190,7 +244,7 @@ Session saved to `session.db` — no re-scan on restart.
 ## 🐧 Supported Distros
 
 | Distro | Package Manager |
-|---|---|
+| --- | --- |
 | Arch / Manjaro | `pacman` |
 | Ubuntu / Debian / Mint | `apt` |
 | Fedora / RHEL 8+ / AlmaLinux | `dnf` |
@@ -217,22 +271,10 @@ API key invalid or revoked. Get a new one at [console.groq.com](https://console.
 **Groq 429 — rate limit**
 14,400 requests/day free. Bot waits 10s and retries automatically.
 
-**Blocked contacts still getting replies**
-Make sure numbers include the country code (e.g. `919876543210` not `9876543210`). The bot does suffix matching so both work, but full numbers are more reliable.
+**Deleted contacts still skipped**
+WhatsApp caches app state data. Run the SQLite purge command above to clear unlabelled or stale entries from `session.db`.
 
 ---
-
-# Purge stale/deleted contact cache and optimize DB size
-
-```
-sqlite3 ~/wa/session.db "DELETE FROM whatsmeow_contacts WHERE (full_name IS NULL OR full_name = '') AND (first_name IS NULL OR first_name = ''); VACUUM;"
-```
-
-# View all Synced Contacts 
-
-```
-sqlite3 -header -column ~/wa/session.db "SELECT distinct their_jid AS JID, full_name AS Name FROM whatsmeow_contacts WHERE full_name IS NOT NULL AND full_name != '' ORDER BY full_name;"
-```
 
 ## ⚠️ Disclaimer
 
@@ -242,12 +284,16 @@ Uses the unofficial WhatsApp Web protocol via [neonize](https://github.com/krypt
 
 ## 👤 Author
 
-**Vineet** — [ci.vps@proton.me](mailto:ci.vps@proton.me) · [@psvineet](https://github.com/psvineet)
+**Vineet** — [ci.vps@proton.me](https://www.google.com/search?q=mailto%3Aci.vps%40proton.me) · [@psvineet](https://github.com/psvineet)
 
 ---
 
 ## 🛠️ Built With
 
-- [neonize](https://github.com/krypton-byte/neonize) — Python WhatsApp library
-- [Groq](https://groq.com) — Free LLM API
-- [Meta Llama](https://ai.meta.com/llama/) / [Qwen](https://qwenlm.github.io/) — AI models
+* [neonize](https://github.com/krypton-byte/neonize) — Python WhatsApp library
+* [Groq](https://groq.com) — Free LLM API
+* [Meta Llama](https://ai.meta.com/llama/) / [Qwen](https://qwenlm.github.io/) — AI models
+
+```
+
+```
