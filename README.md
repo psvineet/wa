@@ -41,7 +41,7 @@ Auto-reply to WhatsApp messages using a free AI (Groq) — runs on any Linux ser
 ## 🚀 Quick Setup (one command)
 
 ```bash
-bash <(curl -s [https://raw.githubusercontent.com/psvineet/wa/main/setup.sh](https://raw.githubusercontent.com/psvineet/wa/main/setup.sh))
+bash <(curl -s https://raw.githubusercontent.com/psvineet/wa/main/setup.sh)
 
 ```
 
@@ -80,7 +80,7 @@ Everything else — `bot.py`, `run.sh`, `remove.sh` — is written automatically
 
 ## ▶️ Running the Bot
 
-**Always use `run.sh**` — it activates the venv so you never get `ModuleNotFoundError`:
+**Always use `run.sh`** — it activates the venv so you never get `ModuleNotFoundError`:
 
 ```bash
 ~/wa/run.sh
