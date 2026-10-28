@@ -1,4 +1,3 @@
-
 # 🤖 WhatsApp AI Autoresponder
 
 Auto-reply to WhatsApp messages using a free AI (Groq) — runs on any Linux server with 1GB RAM. No browser, no GUI, no paid API.
@@ -48,7 +47,7 @@ bash <(curl -s [https://raw.githubusercontent.com/psvineet/wa/main/setup.sh](htt
 
 The wizard will ask:
 
-1. **Groq API key** — free at [console.groq.com](https://console.groq.com)
+1. **Groq API key** — free at [consolegroq.com](https://console.groq.com)
 2. **AI model** — fetched live from your account, pick by number
 3. **Phone number** — with country code, no `+` (e.g. `919876543210`)
 4. **Bot personality** — custom system prompt or press Enter for default
@@ -174,12 +173,12 @@ tail -f ~/wa/bot.log
 
 ## 🛠️ Database Inspection & Maintenance
 
-WhatsApp saves contact app state metadata into `session.db`. Use these terminal commands to view or sanitize your contact records:
+WhatsApp saves contact app state metadata into `session.db`. Use these terminal commands to view, delete specific numbers, or reset your contact records:
 
 **View All Synced Contacts:**
 
 ```bash
-sqlite3 -header -column ~/wa/session.db "SELECT distinct their_jid AS JID, full_name AS Name FROM whatsmeow_contacts WHERE full_name IS NOT NULL AND full_name != '' ORDER BY full_name;"
+sqlite3 -header -column ~/wa/session.db "SELECT DISTINCT their_jid AS JID, full_name AS Name FROM whatsmeow_contacts WHERE full_name IS NOT NULL AND full_name != '' ORDER BY full_name;"
 
 ```
 
@@ -197,10 +196,17 @@ sqlite3 ~/wa/session.db "SELECT * FROM whatsmeow_contacts WHERE their_jid LIKE '
 
 ```
 
-**Purge Stale/Deleted Contact Cache & Vacuum Database:**
+**Delete a Specific Contact from Database Cache:**
 
 ```bash
-sqlite3 ~/wa/session.db "DELETE FROM whatsmeow_contacts WHERE (full_name IS NULL OR full_name = '') AND (first_name IS NULL OR first_name = ''); VACUUM;"
+sqlite3 ~/wa/session.db "DELETE FROM whatsmeow_contacts WHERE their_jid LIKE '%919876543210%';"
+
+```
+
+**Purge ALL Contacts & Reset Contact Cache:**
+
+```bash
+sqlite3 ~/wa/session.db "DELETE FROM whatsmeow_contacts; VACUUM;"
 
 ```
 
@@ -272,7 +278,7 @@ API key invalid or revoked. Get a new one at [console.groq.com](https://console.
 14,400 requests/day free. Bot waits 10s and retries automatically.
 
 **Deleted contacts still skipped**
-WhatsApp caches app state data. Run the SQLite purge command above to clear unlabelled or stale entries from `session.db`.
+WhatsApp caches app state data in `session.db`. Delete the specific number using the single-number delete command or clear the entire table using the reset command above.
 
 ---
 
