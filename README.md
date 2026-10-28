@@ -224,7 +224,15 @@ Make sure numbers include the country code (e.g. `919876543210` not `9876543210`
 
 # Purge stale/deleted contact cache and optimize DB size
 
-`sqlite3 ~/wa/session.db "DELETE FROM whatsmeow_contacts WHERE (full_name IS NULL OR full_name = '') AND (first_name IS NULL OR first_name = ''); VACUUM;"`
+```
+sqlite3 ~/wa/session.db "DELETE FROM whatsmeow_contacts WHERE (full_name IS NULL OR full_name = '') AND (first_name IS NULL OR first_name = ''); VACUUM;"
+```
+
+# View all Synced Contacts 
+
+```
+sqlite3 -header -column ~/wa/session.db "SELECT distinct their_jid AS JID, full_name AS Name FROM whatsmeow_contacts WHERE full_name IS NOT NULL AND full_name != '' ORDER BY full_name;"
+```
 
 ## ⚠️ Disclaimer
 
