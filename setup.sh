@@ -1,7 +1,7 @@
 #!/bin/bash
 # WhatsApp AI Bot - Universal Setup
 # Supports: Arch, Ubuntu, Debian, Fedora, CentOS, RHEL, openSUSE, Alpine
-# Run: bash <(curl -s https://raw.githubusercontent.com/psvineet/wa/main/setup.sh)
+# Run: bash setup.sh
 
 set -euo pipefail
 IFS=$'\n\t'
@@ -156,7 +156,7 @@ echo ""
 ask "Bot personality / system prompt (Enter for default):"
 read -rp "  Prompt: " SYS_PROMPT
 if [[ -z "${SYS_PROMPT:-}" ]]; then
-    SYS_PROMPT="You are Vineet's personal AI assistant on WhatsApp. Reply on his behalf — be concise, warm, and natural. Match the language the sender uses (Hindi, English, or Hinglish). Never reveal you are an AI unless directly asked. Keep replies under 3 sentences. Always start every reply with 🤖"
+    SYS_PROMPT="You are personal AI assistant on WhatsApp. Reply on user's behalf — be concise, warm, and natural. Match the language the sender uses (Hindi, English, or Hinglish). Never reveal you are an AI unless directly asked. Keep replies under 3 sentences. Always start every reply with 🤖"
 fi
 SYS_PROMPT="${SYS_PROMPT//\\/\\\\}"
 SYS_PROMPT="${SYS_PROMPT//\"/\\\"}"
@@ -240,8 +240,23 @@ else
 fi
 echo ""
 
-# ── Step 4: Write all files ────────────────────────────────────────────────────
-echo -e "${YELLOW}[4/7] Writing bot files...${NC}"
+# ── Step 4: Write all files & Deduplicate DB ──────────────────────────────────
+echo -e "${YELLOW}[4/7] Writing bot files & cleaning database...${NC}"
+
+# Clean existing session.db duplicates if database exists
+if [[ -f "$BOTDIR/session.db" ]]; then
+    info "Running maintenance on session.db..."
+    sqlite3 "$BOTDIR/session.db" "
+        DELETE FROM whatsmeow_contacts 
+        WHERE rowid NOT IN (
+            SELECT MIN(rowid) 
+            FROM whatsmeow_contacts 
+            GROUP BY our_jid, their_jid
+        );
+        VACUUM;
+    " 2>/dev/null || true
+    success "Database cleaned & deduplicated"
+fi
 
 # config.json
 cat > config.json << CFGEOF
@@ -270,8 +285,6 @@ cat > bot.py << 'BOTEOF'
 #!/usr/bin/env python3
 """
 WhatsApp AI Autoresponder — neonize + Groq
-Author : Vineet <ci.vps@proton.me>
-GitHub : https://github.com/psvineet/wa
 License: MIT
 """
 
@@ -304,7 +317,7 @@ stream_handler.setFormatter(log_formatter)
 root_logger.addHandler(stream_handler)
 
 log = logging.getLogger("wa-bot")
-neonize_log.setLevel(logging.WARNING)
+neonize_log.setLevel(logging.ERROR)
 
 for _noisy in ("neonize.utils.ffmpeg", "neonize.utils", "whatsmeow"):
     logging.getLogger(_noisy).setLevel(logging.CRITICAL)
@@ -357,7 +370,29 @@ def numbers_match(stored: str, jid_num: str) -> bool:
 def in_list(jid_num: str, number_list: list) -> bool:
     return any(numbers_match(n, jid_num) for n in number_list)
 
-# ── Database Check for Saved Contacts ─────────────────────────────────────────
+# ── Database Maintenance & Contact Check ──────────────────────────────────────
+def clean_database():
+    """Deduplicate contacts in session.db on launch."""
+    if not os.path.exists(DB_FILE):
+        return
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            DELETE FROM whatsmeow_contacts 
+            WHERE rowid NOT IN (
+                SELECT MIN(rowid) 
+                FROM whatsmeow_contacts 
+                GROUP BY our_jid, their_jid
+            )
+            """
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log.warning(f"DB maintenance warning: {e}")
+
 def is_saved_contact(jid_num: str) -> bool:
     """Checks session.db whatsmeow_contacts table for saved names."""
     if not os.path.exists(DB_FILE):
@@ -463,24 +498,32 @@ def should_reply(sender_jid: str, chat_jid: str) -> bool:
     # group handling
     if is_group(chat_jid):
         if not ALLOW_GROUPS:
+            log.info(f"⏭  Skipped group chat message: {jid_number(chat_jid)}")
             return False
         gid = jid_number(chat_jid)
         if BLOCKED_GROUPS and in_list(gid, BLOCKED_GROUPS):
+            log.info(f"⏭  Skipped blocked group: {gid}")
             return False
         if ALLOWED_GROUPS and not in_list(gid, ALLOWED_GROUPS):
+            log.info(f"⏭  Skipped unallowed group: {gid}")
             return False
         return True
 
     # LID fallback if real phone JID still couldn't be resolved
     if is_lid(sender_jid):
         if MODE == "whitelist":
+            log.info("⏭  Skipped unresolvable privacy LID JID (Whitelist Mode)")
             return False
         number = jid_number(chat_jid)
         if number and not is_lid(chat_jid):
             if ONLY_STRANGERS and is_saved_contact(number):
                 log.info(f"⏭  Skipped saved contact: {number}")
                 return False
-            return not in_list(number, BLOCKED)
+            if in_list(number, BLOCKED):
+                log.info(f"⏭  Skipped blocked contact: {number}")
+                return False
+            return True
+        log.info("⏭  Skipped unresolvable privacy LID JID")
         return False
 
     number = jid_number(sender_jid)
@@ -491,12 +534,19 @@ def should_reply(sender_jid: str, chat_jid: str) -> bool:
         return False
 
     if MODE == "whitelist":
-        return in_list(number, ALLOWED)
+        if not in_list(number, ALLOWED):
+            log.info(f"⏭  Skipped non-whitelisted contact: {number}")
+            return False
+        return True
     if MODE == "blacklist":
-        return not in_list(number, BLOCKED)
+        if in_list(number, BLOCKED):
+            log.info(f"⏭  Skipped blocked contact: {number}")
+            return False
+        return True
     return True
 
 # ── Client ────────────────────────────────────────────────────────────────────
+clean_database()
 client = NewClient(DB_FILE)
 
 @client.event(ConnectedEv)
@@ -531,8 +581,8 @@ def on_message(_c, message: MessageEv):
 
         log.info(f"📩 {jid_number(sender_jid)}: {text[:80]}")
 
+        # Evaluate filter — should_reply logs exact single skip reason if False
         if not should_reply(sender_jid, chat_jid):
-            log.info(f"⏭  Skipped {jid_number(sender_jid)}")
             return
 
         if REPLY_DELAY > 0:
@@ -591,9 +641,6 @@ cat > run.sh << 'RUNEOF'
 #!/bin/bash
 # WhatsApp AI Bot — launcher
 # Activates venv automatically. Never run bot.py directly.
-# Usage:
-#   ./run.sh                 start the bot
-#   ./run.sh --list-models   list chat models on your Groq account
 
 BOTDIR="$(cd "$(dirname "$0")" && pwd)"
 VENV="$BOTDIR/venv"
