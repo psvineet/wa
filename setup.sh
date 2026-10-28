@@ -1,8 +1,11 @@
 #!/bin/bash
-# WhatsApp AI Bot - Arch Linux Full Auto Setup
+# WhatsApp AI Bot - Universal Setup
+# Supports: Arch, Ubuntu, Debian, Fedora, CentOS, RHEL, openSUSE, Alpine
 # Run: bash setup.sh
 
-set -e
+# ── Safety ─────────────────────────────────────────────────────────────────────
+set -euo pipefail
+IFS=$'\n\t'
 
 # ── Colors ─────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -12,6 +15,14 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
+# ── Helpers ────────────────────────────────────────────────────────────────────
+info()    { echo -e "${CYAN}  $*${NC}"; }
+success() { echo -e "${GREEN}  ✓ $*${NC}"; }
+warn()    { echo -e "${YELLOW}  ! $*${NC}"; }
+error()   { echo -e "${RED}  ✗ $*${NC}"; exit 1; }
+ask()     { echo -e "${CYAN}  $*${NC}"; }
+
+# ── Banner ─────────────────────────────────────────────────────────────────────
 clear
 echo -e "${BOLD}${CYAN}"
 echo "  ██╗    ██╗ █████╗     ██████╗  ██████╗ ████████╗"
@@ -25,18 +36,66 @@ echo -e "${BOLD}  WhatsApp AI Autoresponder — Setup Wizard${NC}"
 echo "  ─────────────────────────────────────────"
 echo ""
 
-# ── Step 1: System packages ────────────────────────────────────────────────────
-echo -e "${YELLOW}[1/6] Installing system packages...${NC}"
-sudo pacman -Sy --noconfirm python python-pip python-virtualenv 2>/dev/null | tail -1
-echo -e "${GREEN}  ✓ Done${NC}"
+# ── Step 1: Detect distro + install packages ───────────────────────────────────
+echo -e "${YELLOW}[1/6] Detecting distro and installing packages...${NC}"
+
+PKG_INSTALLED=false
+
+if command -v pacman &>/dev/null; then
+    info "Distro: Arch / Manjaro"
+    sudo pacman -Sy --noconfirm python python-pip python-virtualenv
+    PKG_INSTALLED=true
+
+elif command -v apt-get &>/dev/null; then
+    info "Distro: Debian / Ubuntu / Mint"
+    sudo apt-get update -qq
+    sudo apt-get install -y python3 python3-pip python3-venv curl
+    PKG_INSTALLED=true
+
+elif command -v dnf &>/dev/null; then
+    info "Distro: Fedora / RHEL 8+ / AlmaLinux"
+    sudo dnf install -y python3 python3-pip python3-virtualenv curl
+    PKG_INSTALLED=true
+
+elif command -v yum &>/dev/null; then
+    info "Distro: CentOS / RHEL 7"
+    sudo yum install -y python3 python3-pip curl
+    pip3 install --quiet virtualenv
+    PKG_INSTALLED=true
+
+elif command -v zypper &>/dev/null; then
+    info "Distro: openSUSE"
+    sudo zypper install -y python3 python3-pip python3-virtualenv curl
+    PKG_INSTALLED=true
+
+elif command -v apk &>/dev/null; then
+    info "Distro: Alpine"
+    sudo apk add --no-cache python3 py3-pip curl
+    pip3 install --quiet virtualenv
+    PKG_INSTALLED=true
+fi
+
+[[ "$PKG_INSTALLED" == false ]] && error "Unknown distro. Install python3 + pip manually then rerun."
+
+# ensure 'python' command exists
+if ! command -v python &>/dev/null; then
+    PYTHON3_PATH="$(command -v python3)"
+    sudo ln -sf "$PYTHON3_PATH" /usr/local/bin/python 2>/dev/null || \
+    sudo ln -sf "$PYTHON3_PATH" /usr/bin/python 2>/dev/null || true
+fi
+
+# verify python works
+python --version &>/dev/null || error "python3 not found after install. Check your system."
+
+success "Packages installed"
 echo ""
 
 # ── Step 2: Create folder ──────────────────────────────────────────────────────
 BOTDIR="$HOME/wa"
-echo -e "${YELLOW}[2/6] Creating project folder at ~/wa ...${NC}"
+echo -e "${YELLOW}[2/6] Creating project at ~/wa ...${NC}"
 mkdir -p "$BOTDIR"
 cd "$BOTDIR"
-echo -e "${GREEN}  ✓ Done${NC}"
+success "Folder ready: $BOTDIR"
 echo ""
 
 # ── Step 3: Interactive config ─────────────────────────────────────────────────
@@ -44,118 +103,128 @@ echo -e "${YELLOW}[3/6] Configuration${NC}"
 echo "  ─────────────────────────────────────────"
 echo ""
 
-# Groq API key
-echo -e "${CYAN}  Get your FREE Groq API key at:${NC}"
-echo -e "${BOLD}  https://console.groq.com${NC}"
-echo -e "  → Signup → API Keys → Create New Key"
+# ── Groq API key
+ask "Get your FREE Groq API key at:"
+echo -e "  ${BOLD}https://console.groq.com${NC}"
+echo -e "  Signup → API Keys → Create New Key (no credit card)"
 echo ""
+GROQ_KEY=""
 while true; do
-    read -rp "  Paste your Groq API key: " GROQ_KEY
-    if [[ "$GROQ_KEY" == gsk_* ]]; then
-        echo -e "${GREEN}  ✓ Key looks valid${NC}"
+    read -rp "  Paste Groq API key: " GROQ_KEY
+    GROQ_KEY="${GROQ_KEY// /}"  # strip spaces
+    if [[ "$GROQ_KEY" == gsk_* && ${#GROQ_KEY} -gt 20 ]]; then
+        success "Key valid"
         break
     else
-        echo -e "${RED}  ✗ Key should start with 'gsk_' — try again${NC}"
+        warn "Key must start with 'gsk_' and be complete — try again"
     fi
 done
 echo ""
 
-# Phone number
-echo -e "${CYAN}  Your WhatsApp number (with country code, no + or spaces):${NC}"
-echo -e "  Example: India 91XXXXXXXXXX | US 1XXXXXXXXXX | UK 44XXXXXXXXXX"
+# ── Phone number
+ask "Your WhatsApp number (country code + number, no + or spaces):"
+echo -e "  India: 91XXXXXXXXXX | US: 1XXXXXXXXXX | UK: 44XXXXXXXXXX"
 echo ""
+PHONE=""
 while true; do
     read -rp "  Phone number: " PHONE
-    PHONE="${PHONE//[^0-9]/}"  # strip non-digits
+    PHONE="${PHONE//[^0-9]/}"  # digits only
     if [[ ${#PHONE} -ge 10 && ${#PHONE} -le 15 ]]; then
-        echo -e "${GREEN}  ✓ Number: $PHONE${NC}"
+        success "Number: $PHONE"
         break
     else
-        echo -e "${RED}  ✗ Invalid — digits only, 10-15 chars${NC}"
+        warn "Invalid — digits only, 10-15 characters"
     fi
 done
 echo ""
 
-# Bot personality
-echo -e "${CYAN}  Bot personality / system prompt:${NC}"
-echo -e "  (Press Enter for default)"
-read -rp "  System prompt: " SYS_PROMPT
-if [[ -z "$SYS_PROMPT" ]]; then
+# ── Bot personality
+ask "Bot personality / system prompt (Enter for default):"
+read -rp "  Prompt: " SYS_PROMPT
+if [[ -z "${SYS_PROMPT:-}" ]]; then
     SYS_PROMPT="You are a helpful assistant replying on behalf of the phone owner. Keep replies short and friendly."
 fi
-echo -e "${GREEN}  ✓ Prompt set${NC}"
+# escape double quotes for JSON safety
+SYS_PROMPT="${SYS_PROMPT//\"/\\\"}"
+success "Prompt set"
 echo ""
 
-# Mode
-echo -e "${CYAN}  Reply mode:${NC}"
+# ── Reply mode
+ask "Reply mode:"
 echo "  1) blacklist — reply everyone EXCEPT blocked numbers (recommended)"
-echo "  2) whitelist — reply ONLY allowed numbers"
+echo "  2) whitelist — reply ONLY specific numbers"
 echo ""
+MODE=""
 while true; do
     read -rp "  Choose [1/2]: " MODE_CHOICE
-    if [[ "$MODE_CHOICE" == "1" ]]; then
-        MODE="blacklist"
-        echo -e "${GREEN}  ✓ Blacklist mode${NC}"
-        break
-    elif [[ "$MODE_CHOICE" == "2" ]]; then
-        MODE="whitelist"
-        echo -e "${GREEN}  ✓ Whitelist mode${NC}"
-        break
-    else
-        echo -e "${RED}  ✗ Enter 1 or 2${NC}"
-    fi
+    case "$MODE_CHOICE" in
+        1) MODE="blacklist"; success "Blacklist mode"; break ;;
+        2) MODE="whitelist"; success "Whitelist mode"; break ;;
+        *) warn "Enter 1 or 2" ;;
+    esac
 done
 echo ""
 
-# Contacts
+# ── Contacts
 ALLOWED_JSON="[]"
 BLOCKED_JSON="[]"
 
+build_json_array() {
+    local -n arr=$1
+    if [[ ${#arr[@]} -eq 0 ]]; then
+        echo "[]"
+        return
+    fi
+    local json="["
+    for i in "${!arr[@]}"; do
+        json+="\"${arr[$i]}\""
+        [[ $i -lt $((${#arr[@]}-1)) ]] && json+=","
+    done
+    json+="]"
+    echo "$json"
+}
+
 if [[ "$MODE" == "whitelist" ]]; then
-    echo -e "${CYAN}  Allowed contacts (numbers that get AI replies):${NC}"
-    echo -e "  Enter one per line. Empty line when done."
+    ask "Allowed contacts (only these get AI replies):"
+    echo -e "  Enter one number per line. Empty line to finish."
     ALLOWED_LIST=()
     while true; do
-        read -rp "  Number (or Enter to finish): " NUM
+        read -rp "  Number (Enter to finish): " NUM
         NUM="${NUM//[^0-9]/}"
         [[ -z "$NUM" ]] && break
-        ALLOWED_LIST+=("\"$NUM\"")
-        echo -e "${GREEN}  ✓ Added $NUM${NC}"
+        ALLOWED_LIST+=("$NUM")
+        success "Added $NUM"
     done
-    if [[ ${#ALLOWED_LIST[@]} -gt 0 ]]; then
-        ALLOWED_JSON="[$(IFS=,; echo "${ALLOWED_LIST[*]}")]"
-    fi
+    ALLOWED_JSON="$(build_json_array ALLOWED_LIST)"
 else
-    echo -e "${CYAN}  Blocked contacts (numbers to SKIP — leave empty to reply everyone):${NC}"
-    echo -e "  Enter one per line. Empty line when done."
+    ask "Blocked contacts (leave empty to reply everyone):"
+    echo -e "  Enter one number per line. Empty line to finish."
     BLOCKED_LIST=()
     while true; do
-        read -rp "  Number (or Enter to finish): " NUM
+        read -rp "  Number (Enter to finish): " NUM
         NUM="${NUM//[^0-9]/}"
         [[ -z "$NUM" ]] && break
-        BLOCKED_LIST+=("\"$NUM\"")
-        echo -e "${GREEN}  ✓ Blocked $NUM${NC}"
+        BLOCKED_LIST+=("$NUM")
+        success "Blocked $NUM"
     done
-    if [[ ${#BLOCKED_LIST[@]} -gt 0 ]]; then
-        BLOCKED_JSON="[$(IFS=,; echo "${BLOCKED_LIST[*]}")]"
-    fi
+    BLOCKED_JSON="$(build_json_array BLOCKED_LIST)"
 fi
 echo ""
 
-# Groups
-echo -e "${CYAN}  Reply in WhatsApp groups?${NC}"
+# ── Groups
+ask "Reply in WhatsApp groups?"
 read -rp "  Enable group replies? [y/N]: " GRP
-if [[ "$GRP" =~ ^[Yy]$ ]]; then
+if [[ "${GRP:-}" =~ ^[Yy]$ ]]; then
     ALLOW_GROUPS="true"
-    echo -e "${GREEN}  ✓ Groups enabled${NC}"
+    success "Groups enabled"
 else
     ALLOW_GROUPS="false"
-    echo -e "${GREEN}  ✓ Groups disabled${NC}"
+    success "Groups disabled"
 fi
 echo ""
 
 # ── Step 4: Write files ────────────────────────────────────────────────────────
-echo -e "${YELLOW}[4/6] Writing config and bot files...${NC}"
+echo -e "${YELLOW}[4/6] Writing bot files...${NC}"
 
 # config.json
 cat > config.json << CFGEOF
@@ -175,48 +244,70 @@ cat > config.json << CFGEOF
 }
 CFGEOF
 
+# validate config JSON
+python -c "import json; json.load(open('config.json'))" \
+    || error "config.json is invalid JSON — report this bug"
+
 # bot.py
 cat > bot.py << 'BOTEOF'
 #!/usr/bin/env python3
 """
 WhatsApp AI Autoresponder
 neonize + Groq free API
+
+Author : Vineet <ci.vps@proton.me>
+GitHub : https://github.com/psvineet/wa
+License: MIT
 """
 
-import json, time, logging, requests
+import json, time, logging, sys, requests
 from neonize.client import NewClient
 from neonize.events import MessageEv, ConnectedEv, PairStatusEv
 from neonize.utils import log as neonize_log
 
+# Logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.FileHandler("bot.log"), logging.StreamHandler()]
+    handlers=[logging.FileHandler("bot.log"), logging.StreamHandler(sys.stdout)]
 )
 log = logging.getLogger("wa-bot")
 neonize_log.setLevel(logging.WARNING)
 
-with open("config.json") as f:
-    cfg = json.load(f)
+# Config
+try:
+    with open("config.json") as f:
+        cfg = json.load(f)
+except Exception as e:
+    log.error(f"Cannot read config.json: {e}")
+    sys.exit(1)
 
 GROQ_API_KEY   = cfg["groq_api_key"]
 GROQ_MODEL     = cfg["groq_model"]
 SYSTEM_PROMPT  = cfg["system_prompt"]
 PHONE_NUMBER   = cfg["phone_number"]
 MODE           = cfg["mode"]
-ALLOWED        = set(cfg["allowed_contacts"])
-BLOCKED        = set(cfg["blocked_contacts"])
-ALLOW_GROUPS   = cfg["allow_groups"]
-ALLOWED_GROUPS = set(cfg["allowed_groups"])
-BLOCKED_GROUPS = set(cfg["blocked_groups"])
-IGNORE_OWN     = cfg["ignore_own_messages"]
-REPLY_DELAY    = cfg["reply_delay_seconds"]
+ALLOWED        = set(cfg.get("allowed_contacts", []))
+BLOCKED        = set(cfg.get("blocked_contacts", []))
+ALLOW_GROUPS   = cfg.get("allow_groups", False)
+ALLOWED_GROUPS = set(cfg.get("allowed_groups", []))
+BLOCKED_GROUPS = set(cfg.get("blocked_groups", []))
+IGNORE_OWN     = cfg.get("ignore_own_messages", True)
+REPLY_DELAY    = cfg.get("reply_delay_seconds", 1)
+
+# Validate key
+if not GROQ_API_KEY.startswith("gsk_"):
+    log.error("groq_api_key in config.json looks wrong — must start with gsk_")
+    sys.exit(1)
 
 def ask_groq(user_message: str) -> str:
     try:
         resp = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            },
             json={
                 "model": GROQ_MODEL,
                 "messages": [
@@ -231,10 +322,21 @@ def ask_groq(user_message: str) -> str:
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"].strip()
     except requests.exceptions.Timeout:
-        return "Sorry, slow right now. Try again soon!"
+        log.warning("Groq timeout")
+        return "Sorry, slow right now. Try again!"
+    except requests.exceptions.HTTPError as e:
+        status = e.response.status_code if e.response else "?"
+        if status == 401:
+            log.error("Groq 401 — API key invalid. Update config.json")
+        elif status == 429:
+            log.warning("Groq rate limit hit — waiting 10s")
+            time.sleep(10)
+        else:
+            log.error(f"Groq HTTP {status}: {e}")
+        return None
     except Exception as e:
         log.error(f"Groq error: {e}")
-        return "Sorry, couldn't process that right now."
+        return None
 
 def extract_number(jid: str) -> str:
     return jid.split("@")[0]
@@ -249,12 +351,16 @@ def should_reply(sender_jid: str, chat_jid: str) -> bool:
         if not ALLOW_GROUPS:
             return False
         gid = extract_number(chat_jid)
-        if BLOCKED_GROUPS and gid in BLOCKED_GROUPS: return False
-        if ALLOWED_GROUPS and gid not in ALLOWED_GROUPS: return False
+        if BLOCKED_GROUPS and gid in BLOCKED_GROUPS:
+            return False
+        if ALLOWED_GROUPS and gid not in ALLOWED_GROUPS:
+            return False
         return True
     number = extract_number(sender_jid)
-    if MODE == "whitelist": return number in ALLOWED
-    if MODE == "blacklist": return number not in BLOCKED
+    if MODE == "whitelist":
+        return number in ALLOWED
+    if MODE == "blacklist":
+        return number not in BLOCKED
     return True
 
 client = NewClient("session.db")
@@ -273,44 +379,55 @@ def on_message(_c, message: MessageEv):
         info       = message.Info
         chat_jid   = str(info.MessageSource.Chat)
         sender_jid = str(info.MessageSource.Sender)
-        if info.MessageSource.IsFromMe: return
 
+        if info.MessageSource.IsFromMe:
+            return
+
+        # extract text
         text = ""
         if message.Message.conversation:
             text = message.Message.conversation
         elif message.Message.extendedTextMessage.text:
             text = message.Message.extendedTextMessage.text
-        if not text.strip(): return
+
+        if not text.strip():
+            return  # skip media, stickers, voice
 
         log.info(f"📩 {sender_jid}: {text[:80]}")
+
         if not should_reply(sender_jid, chat_jid):
             log.info(f"⏭️  Skipped: {sender_jid}")
             return
 
-        if REPLY_DELAY > 0: time.sleep(REPLY_DELAY)
+        if REPLY_DELAY > 0:
+            time.sleep(REPLY_DELAY)
+
         reply = ask_groq(text)
-        log.info(f"🤖 {reply[:80]}")
-        _c.reply_message(reply, message)
+        if reply:
+            log.info(f"🤖 {reply[:80]}")
+            _c.reply_message(reply, message)
+
     except Exception as e:
-        log.error(f"Error: {e}", exc_info=True)
+        log.error(f"Message handler error: {e}", exc_info=True)
 
 if __name__ == "__main__":
-    log.info("🚀 Starting WhatsApp AI Bot...")
+    log.info("🚀 WhatsApp AI Bot starting...")
     log.info(f"   Mode   : {MODE}")
     log.info(f"   Groups : {'on' if ALLOW_GROUPS else 'off'}")
     log.info(f"   Model  : {GROQ_MODEL}")
     log.info("")
-    log.info("👉 Scan QR or enter pair code shown below")
+    log.info("👉 Scan QR with WhatsApp: Linked Devices → Link Device")
     log.info("")
     client.connect()
 BOTEOF
 
-# systemd service
+# systemd service file
 WHOAMI=$(whoami)
 cat > wa-bot.service << SVCEOF
 [Unit]
 Description=WhatsApp AI Autoresponder
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -321,68 +438,80 @@ Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=multi-user.target
 SVCEOF
 
-echo -e "${GREEN}  ✓ Files written${NC}"
+success "All files written"
 echo ""
 
-# ── Step 5: Venv + packages ────────────────────────────────────────────────────
-echo -e "${YELLOW}[5/6] Installing Python packages (neonize, requests)...${NC}"
-python -m venv venv
+# ── Step 5: Venv + pip ─────────────────────────────────────────────────────────
+echo -e "${YELLOW}[5/6] Creating virtualenv and installing packages...${NC}"
+
+python -m venv venv || python3 -m venv venv || error "venv creation failed"
+# shellcheck disable=SC1091
 source venv/bin/activate
+
 pip install --upgrade pip -q
 pip install neonize requests -q
-echo -e "${GREEN}  ✓ Packages installed${NC}"
+
+# verify imports
+python -c "import neonize, requests" || error "Package import failed after install"
+
+success "Packages installed and verified"
 echo ""
 
 # ── Step 6: Systemd (optional) ─────────────────────────────────────────────────
-echo -e "${CYAN}  Install as systemd service? (auto-start on boot, runs in background)${NC}"
+echo -e "${YELLOW}[6/6] Auto-start service${NC}"
+ask "Install as systemd service? Runs in background, auto-starts on boot."
 read -rp "  Install service? [Y/n]: " SVC_CHOICE
 
 INSTALL_SERVICE=false
-if [[ ! "$SVC_CHOICE" =~ ^[Nn]$ ]]; then
-    INSTALL_SERVICE=true
-    echo -e "${YELLOW}[6/6] Setting up auto-start service...${NC}"
-    sudo cp wa-bot.service /etc/systemd/system/
-    sudo systemctl daemon-reload
-    sudo systemctl enable wa-bot
-    echo -e "${GREEN}  ✓ Service enabled — bot will auto-start on every reboot${NC}"
+if [[ ! "${SVC_CHOICE:-}" =~ ^[Nn]$ ]]; then
+    if command -v systemctl &>/dev/null; then
+        INSTALL_SERVICE=true
+        sudo cp wa-bot.service /etc/systemd/system/
+        sudo systemctl daemon-reload
+        sudo systemctl enable wa-bot
+        success "Service installed and enabled on boot"
+    else
+        warn "systemd not found — skipping service install"
+    fi
 else
-    echo -e "${YELLOW}  Skipped. Run manually anytime:${NC}"
-    echo -e "  cd ~/wa && source venv/bin/activate && python bot.py"
+    warn "Skipped. Start manually: cd ~/wa && source venv/bin/activate && python bot.py"
 fi
 echo ""
 
 # ── Launch ─────────────────────────────────────────────────────────────────────
 echo -e "${BOLD}${GREEN}============================================${NC}"
-echo -e "${BOLD}${GREEN}  ✅ Setup complete! Launching bot now...  ${NC}"
+echo -e "${BOLD}${GREEN}  ✅ Setup complete! Launching bot...      ${NC}"
 echo -e "${BOLD}${GREEN}============================================${NC}"
 echo ""
-echo -e "${CYAN}  Scan the QR code below with WhatsApp:${NC}"
+info "Scan QR with WhatsApp:"
 echo -e "  Phone → ⋮ Menu → Linked Devices → Link Device"
 echo ""
 
 if [[ "$INSTALL_SERVICE" == true ]]; then
-    echo -e "${YELLOW}  After QR scan, press Ctrl+C — systemd will keep it running.${NC}"
+    warn "After QR scan — press Ctrl+C. Systemd keeps it alive."
     echo -e "  Logs: sudo journalctl -u wa-bot -f"
 else
-    echo -e "${YELLOW}  Press Ctrl+C to stop bot anytime.${NC}"
+    warn "Press Ctrl+C anytime to stop."
 fi
 echo ""
 
-# run bot
+# activate venv and run
 cd "$BOTDIR"
 source venv/bin/activate
-python bot.py
+python bot.py || true
 
-# if service installed, hand off to systemd after first run
+# hand off to systemd if installed
 if [[ "$INSTALL_SERVICE" == true ]]; then
     echo ""
-    echo -e "${GREEN}  Starting bot via systemd...${NC}"
-    sudo systemctl start wa-bot
-    echo -e "${GREEN}  ✓ Bot running in background via systemd${NC}"
-    echo -e "  View logs: sudo journalctl -u wa-bot -f"
+    info "Handing off to systemd..."
+    sudo systemctl start wa-bot || true
+    success "Bot running in background"
+    echo -e "  Logs : sudo journalctl -u wa-bot -f"
+    echo -e "  Stop : sudo systemctl stop wa-bot"
 fi
