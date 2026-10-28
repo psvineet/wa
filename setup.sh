@@ -35,17 +35,17 @@ echo -e "${YELLOW}[1/7] Detecting distro and installing packages...${NC}"
 PKG_INSTALLED=false
 
 if   command -v pacman  &>/dev/null; then info "Arch / Manjaro"
-     sudo pacman -Sy --noconfirm python python-pip python-virtualenv curl; PKG_INSTALLED=true
+     sudo pacman -Sy --noconfirm python python-pip python-virtualenv curl sqlite; PKG_INSTALLED=true
 elif command -v apt-get &>/dev/null; then info "Debian / Ubuntu / Mint"
-     sudo apt-get update -qq && sudo apt-get install -y python3 python3-pip python3-venv curl; PKG_INSTALLED=true
+     sudo apt-get update -qq && sudo apt-get install -y python3 python3-pip python3-venv curl sqlite3; PKG_INSTALLED=true
 elif command -v dnf     &>/dev/null; then info "Fedora / RHEL 8+ / AlmaLinux"
-     sudo dnf install -y python3 python3-pip python3-virtualenv curl; PKG_INSTALLED=true
+     sudo dnf install -y python3 python3-pip python3-virtualenv curl sqlite; PKG_INSTALLED=true
 elif command -v yum     &>/dev/null; then info "CentOS / RHEL 7"
-     sudo yum install -y python3 python3-pip curl && pip3 install --quiet virtualenv; PKG_INSTALLED=true
+     sudo yum install -y python3 python3-pip curl sqlite && pip3 install --quiet virtualenv; PKG_INSTALLED=true
 elif command -v zypper  &>/dev/null; then info "openSUSE"
-     sudo zypper install -y python3 python3-pip python3-virtualenv curl; PKG_INSTALLED=true
+     sudo zypper install -y python3 python3-pip python3-virtualenv curl sqlite3; PKG_INSTALLED=true
 elif command -v apk     &>/dev/null; then info "Alpine"
-     sudo apk add --no-cache python3 py3-pip curl && pip3 install --quiet virtualenv; PKG_INSTALLED=true
+     sudo apk add --no-cache python3 py3-pip curl sqlite && pip3 install --quiet virtualenv; PKG_INSTALLED=true
 fi
 
 [[ "$PKG_INSTALLED" == false ]] && error "Unknown distro. Install python3 + pip manually then rerun."
@@ -150,7 +150,6 @@ while true; do
         warn "Digits only, 10–15 characters, include country code"
     fi
 done
-
 echo ""
 
 # ── Bot personality
@@ -164,8 +163,24 @@ SYS_PROMPT="${SYS_PROMPT//\"/\\\"}"
 success "Prompt set"
 echo ""
 
-# ── Reply mode
-ask "Reply mode:"
+# ── Target Audience Mode (Strangers vs Everyone)
+ask "Target audience:"
+echo "  1) strangers — reply ONLY to unknown / unsaved numbers (ignores saved contacts)"
+echo "  2) everyone  — reply to all contacts (subject to blacklist/whitelist rules)"
+echo ""
+ONLY_STRANGERS="false"
+while true; do
+    read -rp "  Choose [1/2]: " AUDIENCE_CHOICE
+    case "$AUDIENCE_CHOICE" in
+        1) ONLY_STRANGERS="true"; success "Mode: Reply to strangers only"; break ;;
+        2) ONLY_STRANGERS="false"; success "Mode: Reply to everyone"; break ;;
+        *) warn "Enter 1 or 2" ;;
+    esac
+done
+echo ""
+
+# ── Reply mode (Blacklist / Whitelist)
+ask "Filtering mode:"
 echo "  1) blacklist — reply everyone EXCEPT blocked numbers (recommended)"
 echo "  2) whitelist — reply ONLY specific numbers"
 echo ""
@@ -235,6 +250,7 @@ cat > config.json << CFGEOF
   "groq_model": "$GROQ_MODEL",
   "system_prompt": "$SYS_PROMPT",
   "phone_number": "$PHONE",
+  "only_reply_to_strangers": $ONLY_STRANGERS,
   "mode": "$MODE",
   "allowed_contacts": $ALLOWED_JSON,
   "blocked_contacts": $BLOCKED_JSON,
@@ -259,7 +275,7 @@ GitHub : https://github.com/psvineet/wa
 License: MIT
 """
 
-import json, os, time, logging, sys, signal, requests
+import json, os, time, logging, sys, signal, requests, sqlite3
 from neonize.client import NewClient
 from neonize.events import MessageEv, ConnectedEv, PairStatusEv
 from neonize.utils import log as neonize_log
@@ -270,22 +286,19 @@ LOG_FILE = os.path.join(BASE_DIR, "bot.log")
 DB_FILE  = os.path.join(BASE_DIR, "session.db")
 CFG_FILE = os.path.join(BASE_DIR, "config.json")
 
-# ── Explicit Logging Setup (Direct Root Handler Attachment for bot.log) ───────
+# ── Explicit Logging Setup ────────────────────────────────────────────────────
 root_logger = logging.getLogger()
 root_logger.setLevel(logging.INFO)
 
-# Clear existing handlers to prevent duplication
 for h in root_logger.handlers[:]:
     root_logger.removeHandler(h)
 
 log_formatter = logging.Formatter("%(asctime)s [wa-bot %(levelname)s] - %(message)s")
 
-# File Handler
 file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
 file_handler.setFormatter(log_formatter)
 root_logger.addHandler(file_handler)
 
-# Console Handler
 stream_handler = logging.StreamHandler(sys.stdout)
 stream_handler.setFormatter(log_formatter)
 root_logger.addHandler(stream_handler)
@@ -308,6 +321,7 @@ GROQ_API_KEY   = cfg["groq_api_key"]
 GROQ_MODEL     = cfg["groq_model"]
 SYSTEM_PROMPT  = cfg["system_prompt"]
 PHONE_NUMBER   = cfg["phone_number"].strip()
+ONLY_STRANGERS = cfg.get("only_reply_to_strangers", False)
 MODE           = cfg["mode"]
 ALLOWED        = [n.strip() for n in cfg.get("allowed_contacts", [])]
 BLOCKED        = [n.strip() for n in cfg.get("blocked_contacts", [])]
@@ -327,10 +341,7 @@ def norm(number: str) -> str:
     return number.strip().lstrip('+').lstrip('0').strip()
 
 def numbers_match(stored: str, jid_num: str) -> bool:
-    """
-    Match phone numbers securely regardless of country-code prefix.
-    Requires exact match or minimum 10-digit suffix alignment to prevent false positives.
-    """
+    """Match phone numbers securely regardless of country-code prefix."""
     s = norm(stored)
     j = norm(jid_num)
     if not s or not j:
@@ -345,6 +356,33 @@ def numbers_match(stored: str, jid_num: str) -> bool:
 
 def in_list(jid_num: str, number_list: list) -> bool:
     return any(numbers_match(n, jid_num) for n in number_list)
+
+# ── Database Check for Saved Contacts ─────────────────────────────────────────
+def is_saved_contact(jid_num: str) -> bool:
+    """Checks session.db whatsmeow_contacts table for saved names."""
+    if not os.path.exists(DB_FILE):
+        return False
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT 1 FROM whatsmeow_contacts 
+            WHERE their_jid LIKE ? 
+              AND (
+                (full_name IS NOT NULL AND full_name != '') 
+                OR (first_name IS NOT NULL AND first_name != '')
+              )
+            LIMIT 1
+            """,
+            (f"%{jid_num}%",)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return row is not None
+    except Exception as e:
+        log.error(f"Error querying session.db: {e}")
+        return False
 
 # ── Groq ──────────────────────────────────────────────────────────────────────
 def ask_groq(user_message: str):
@@ -379,8 +417,7 @@ def ask_groq(user_message: str):
         if status == 401:
             log.error("Groq 401 — API key invalid. Update config.json and restart.")
         elif status == 404:
-            log.error(f"Groq 404 — model '{GROQ_MODEL}' not on your account. "
-                      f"Run: ~/wa/run.sh --list-models")
+            log.error(f"Groq 404 — model '{GROQ_MODEL}' not on your account. Run: ~/wa/run.sh --list-models")
         elif status == 429:
             log.warning("Groq rate limit — waiting 10s")
             time.sleep(10)
@@ -415,7 +452,7 @@ def is_lid(jid: str) -> bool:
 
 # ── Filter ────────────────────────────────────────────────────────────────────
 def should_reply(sender_jid: str, chat_jid: str) -> bool:
-    # Resolve real sender number if sender_jid is a privacy @lid but direct chat JID has the phone number
+    # Resolve real sender number if sender_jid is @lid but chat_jid carries standard phone JID
     if is_lid(sender_jid) and not is_group(chat_jid) and not is_lid(chat_jid):
         sender_jid = chat_jid
 
@@ -440,10 +477,18 @@ def should_reply(sender_jid: str, chat_jid: str) -> bool:
             return False
         number = jid_number(chat_jid)
         if number and not is_lid(chat_jid):
+            if ONLY_STRANGERS and is_saved_contact(number):
+                log.info(f"⏭  Skipped saved contact: {number}")
+                return False
             return not in_list(number, BLOCKED)
-        return False  # default to safe block for unresolvable privacy JIDs
+        return False
 
     number = jid_number(sender_jid)
+
+    # 🛑 STRANGERS-ONLY CHECK: Skip if contact is saved in session.db
+    if ONLY_STRANGERS and is_saved_contact(number):
+        log.info(f"⏭  Skipped saved contact: {number}")
+        return False
 
     if MODE == "whitelist":
         return in_list(number, ALLOWED)
@@ -482,7 +527,7 @@ def on_message(_c, message: MessageEv):
         ).strip()
 
         if not text:
-            return  # skip media, stickers, voice notes
+            return
 
         log.info(f"📩 {jid_number(sender_jid)}: {text[:80]}")
 
@@ -501,7 +546,7 @@ def on_message(_c, message: MessageEv):
     except Exception as e:
         log.error(f"Message handler error: {e}", exc_info=True)
 
-# ── Main (signal-safe reconnect loop) ────────────────────────────────────────
+# ── Main ──────────────────────────────────────────────────────────────────────
 _stop = False
 
 def _shutdown(sig, frame):
@@ -515,6 +560,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, _shutdown)
 
     log.info("🚀 WhatsApp AI Bot starting...")
+    log.info(f"   Target : {'Strangers only' if ONLY_STRANGERS else 'Everyone'}")
     log.info(f"   Mode   : {MODE}")
     log.info(f"   Groups : {'on' if ALLOW_GROUPS else 'off'}")
     log.info(f"   Model  : {GROQ_MODEL}")
