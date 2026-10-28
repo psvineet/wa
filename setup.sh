@@ -151,8 +151,6 @@ while true; do
     fi
 done
 
-# extract country code (first 1-3 digits heuristic)
-# we store full number and let bot do suffix matching — no strict extraction needed
 echo ""
 
 # ── Bot personality
@@ -266,25 +264,35 @@ from neonize.client import NewClient
 from neonize.events import MessageEv, ConnectedEv, PairStatusEv
 from neonize.utils import log as neonize_log
 
-# ── Paths (absolute so bot.log always lands in ~/wa/) ─────────────────────────
+# ── Paths ─────────────────────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = os.path.join(BASE_DIR, "bot.log")
 DB_FILE  = os.path.join(BASE_DIR, "session.db")
 CFG_FILE = os.path.join(BASE_DIR, "config.json")
 
-# ── Logging ───────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [wa-bot %(levelname)s] - %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE, encoding="utf-8"),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
+# ── Explicit Logging Setup (Direct Root Handler Attachment for bot.log) ───────
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+
+# Clear existing handlers to prevent duplication
+for h in root_logger.handlers[:]:
+    root_logger.removeHandler(h)
+
+log_formatter = logging.Formatter("%(asctime)s [wa-bot %(levelname)s] - %(message)s")
+
+# File Handler
+file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+file_handler.setFormatter(log_formatter)
+root_logger.addHandler(file_handler)
+
+# Console Handler
+stream_handler = logging.StreamHandler(sys.stdout)
+stream_handler.setFormatter(log_formatter)
+root_logger.addHandler(stream_handler)
+
 log = logging.getLogger("wa-bot")
 neonize_log.setLevel(logging.WARNING)
 
-# suppress noisy neonize sub-loggers
 for _noisy in ("neonize.utils.ffmpeg", "neonize.utils", "whatsmeow"):
     logging.getLogger(_noisy).setLevel(logging.CRITICAL)
 
@@ -320,13 +328,20 @@ def norm(number: str) -> str:
 
 def numbers_match(stored: str, jid_num: str) -> bool:
     """
-    Match phone numbers regardless of country-code prefix.
-    E.g. stored='9876543210' matches jid_num='919876543210' (India prefix 91).
-    Also handles full match when both have country code.
+    Match phone numbers securely regardless of country-code prefix.
+    Requires exact match or minimum 10-digit suffix alignment to prevent false positives.
     """
     s = norm(stored)
     j = norm(jid_num)
-    return j == s or j.endswith(s) or s.endswith(j)
+    if not s or not j:
+        return False
+    if j == s:
+        return True
+    if len(s) >= 10 and j.endswith(s):
+        return True
+    if len(j) >= 10 and s.endswith(j):
+        return True
+    return False
 
 def in_list(jid_num: str, number_list: list) -> bool:
     return any(numbers_match(n, jid_num) for n in number_list)
@@ -379,9 +394,11 @@ def ask_groq(user_message: str):
 
 # ── JID helpers ───────────────────────────────────────────────────────────────
 def jid_to_str(jid_obj) -> str:
+    if not jid_obj:
+        return ""
     try:
-        user   = jid_obj.User   or ""
-        server = jid_obj.Server or "s.whatsapp.net"
+        user   = getattr(jid_obj, "User", "") or ""
+        server = getattr(jid_obj, "Server", "") or "s.whatsapp.net"
         return f"{user}@{server}"
     except Exception:
         return str(jid_obj)
@@ -398,6 +415,10 @@ def is_lid(jid: str) -> bool:
 
 # ── Filter ────────────────────────────────────────────────────────────────────
 def should_reply(sender_jid: str, chat_jid: str) -> bool:
+    # Resolve real sender number if sender_jid is a privacy @lid but direct chat JID has the phone number
+    if is_lid(sender_jid) and not is_group(chat_jid) and not is_lid(chat_jid):
+        sender_jid = chat_jid
+
     # ignore own messages
     if IGNORE_OWN and numbers_match(PHONE_NUMBER, jid_number(sender_jid)):
         return False
@@ -413,11 +434,14 @@ def should_reply(sender_jid: str, chat_jid: str) -> bool:
             return False
         return True
 
-    # LID JIDs — phone number unknown, cannot match against list
+    # LID fallback if real phone JID still couldn't be resolved
     if is_lid(sender_jid):
-        # blacklist: unknown = not blocked → reply
-        # whitelist: unknown = not confirmed → skip
-        return MODE == "blacklist"
+        if MODE == "whitelist":
+            return False
+        number = jid_number(chat_jid)
+        if number and not is_lid(chat_jid):
+            return not in_list(number, BLOCKED)
+        return False  # default to safe block for unresolvable privacy JIDs
 
     number = jid_number(sender_jid)
 
@@ -443,7 +467,10 @@ def on_message(_c, message: MessageEv):
     try:
         info       = message.Info
         chat_jid   = jid_to_str(info.MessageSource.Chat)
-        sender_jid = jid_to_str(info.MessageSource.Sender)
+        
+        # Prefer SenderAlt (phone JID) if present on @lid messages, fallback to Sender
+        sender_obj = getattr(info.MessageSource, "SenderAlt", None) or info.MessageSource.Sender
+        sender_jid = jid_to_str(sender_obj)
 
         if info.MessageSource.IsFromMe:
             return
@@ -560,6 +587,7 @@ models = sorted([m['id'] for m in data.get('data',[]) if not exclude.search(m['i
 fi
 
 cd "$BOTDIR"
+export PYTHONUNBUFFERED=1
 exec python3 bot.py
 RUNEOF
 chmod +x run.sh
@@ -608,7 +636,7 @@ echo ""
 RMEOF
 chmod +x remove.sh
 
-# ── systemd service (uses run.sh so venv always active) ────────────────────────
+# ── systemd service ───────────────────────────────────────────────────────────
 WHOAMI=$(whoami)
 cat > wa-bot.service << SVCEOF
 [Unit]
