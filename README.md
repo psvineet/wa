@@ -298,8 +298,4 @@ Uses the unofficial WhatsApp Web protocol via [neonize](https://github.com/krypt
 
 * [neonize](https://github.com/krypton-byte/neonize) — Python WhatsApp library
 * [Groq](https://groq.com) — Free LLM API
-* [Meta Llama](https://ai.meta.com/llama/) / [Qwen](https://qwenlm.github.io/) — AI models
-
-```
-
-```
+* [Meta Llama](https://ai.meta.com/llama/) / [Qwen](https://qwenlm.github.io/) — AI model
